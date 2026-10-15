@@ -63,6 +63,9 @@ def main():
     ap.add_argument("--spec-version", choices=["1.0", "1.1"], default="1.0")
     ap.add_argument("--jobs", type=int, help="py3dtiles parallel workers")
     ap.add_argument("--color-scale", type=int, help="Pass 256 if RGB is 8-bit")
+    ap.add_argument("--name",
+                    help="Results subfolder name (default: the input file name). "
+                         "Use different names to keep several runs of the same file.")
     ap.add_argument("--skip-prepare", action="store_true",
                     help="Do not rewrite to LAS 1.4 even if step 1 recommends it. "
                          "Use this to demonstrate the failure mode.")
@@ -72,7 +75,7 @@ def main():
     if not src.exists():
         sys.exit(f"Input file not found: {src}")
 
-    run_dir = ROOT / "results" / src.stem
+    run_dir = ROOT / "results" / (args.name or src.stem)
     run_dir.mkdir(parents=True, exist_ok=True)
     started = time.time()
 

@@ -44,9 +44,11 @@ those get answered.
 
   Colour by: Intensity
       Only meaningful if intensity was included in --extra-fields.
-      The display scale is set by INTENSITY_SCALE near the top of the
-      script in index.html. Raise it if the image looks washed out,
-      lower it if it looks dark.
+      The white point is set automatically from a sample tile (99th
+      percentile of its intensity values), so it adapts to DJI Terra's
+      0..65280 range as well as tools that use small values. Override it
+      in the "Intensity white point" box: raise it if the image looks
+      washed out, lower it if it looks dark.
 
   Attributes found
       The viewer reads one tile's header and lists the attributes it

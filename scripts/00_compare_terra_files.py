@@ -294,10 +294,16 @@ def main():
               f"{('yes' if hist_ok else 'NO') if hist_ok is not None else 'not checked (sampled)':>34}")
 
         count_ok = m["points"] == c["points"]
-        bounds_ok = np.allclose(m["mins"], c["mins"], atol=0.01) and np.allclose(m["maxs"], c["maxs"], atol=0.01)
+        bound_diff = float(max(
+            np.max(np.abs(np.array(m["mins"]) - np.array(c["mins"]))),
+            np.max(np.abs(np.array(m["maxs"]) - np.array(c["maxs"]))),
+        ))
         newer = c["modified"] > m["modified"]
 
-        if count_ok and bounds_ok and hist_ok in (True, None):
+        # Same points (count + class histogram) is what makes it a faithful copy.
+        # Header bounding boxes are metadata and can legitimately differ: a COPC
+        # writer recomputes them from the points, other writers may round them.
+        if count_ok and hist_ok in (True, None):
             verdict = (f"YES. Same points, re-packed as COPC (LAS {c['version']} pf{c['pf']}, compressed, "
                        "spatially ordered). ")
             if m["pf"] < 6:
@@ -313,6 +319,30 @@ def main():
             verdict = "NO, it differs from the .las. Treat the .las as the source of truth."
         print(f"\n  VERDICT: {verdict}")
         findings.append(("copc vs merged las", verdict))
+
+        # Which header bounding box is accurate? The numbered files are an
+        # independent witness: their combined extent must equal the true extent.
+        if bound_diff > 0.01:
+            print(f"\n  HEADER BOUNDS: the two headers disagree by up to {bound_diff:.2f} m.")
+            if parts:
+                pmin = np.min([f["mins"] for f in parts], axis=0)
+                pmax = np.max([f["maxs"] for f in parts], axis=0)
+                err_las = max(np.max(np.abs(pmin - m["mins"])), np.max(np.abs(pmax - m["maxs"])))
+                err_copc = max(np.max(np.abs(pmin - c["mins"])), np.max(np.abs(pmax - c["maxs"])))
+                print(f"  Combined extent of the numbered files:")
+                print(f"    min {pmin[0]:.2f} / {pmin[1]:.2f} / {pmin[2]:.2f}   "
+                      f"max {pmax[0]:.2f} / {pmax[1]:.2f} / {pmax[2]:.2f}")
+                print(f"  Mismatch vs {m['name']:<24}: {err_las:.2f} m")
+                print(f"  Mismatch vs {c['name']:<24}: {err_copc:.2f} m")
+                if err_copc < err_las:
+                    note = (f"The {m['name']} header bounding box is inaccurate (off by up to "
+                            f"{err_las:.2f} m, some points lie outside it); the COPC header matches the "
+                            "data. py3dtiles builds its octree from the header bounding box, which is "
+                            "one more reason to convert from the COPC file.")
+                else:
+                    note = "The .las header matches the numbered files; the COPC header is the odd one out."
+                print(f"\n  NOTE: {note}")
+                findings.append(("header bounds", note))
 
     # ------------------------------------------------------------ recommendation
     print("\n" + line)
@@ -330,7 +360,8 @@ def main():
         if parts:
             smallest = min(parts, key=lambda f: f["points"])
             print(f"  Quick test first on   : {smallest['name']}  ({smallest['points']:,} points, fastest)")
-        print(f"  Large-dataset test    : {m['name']}  ({m['points']:,} points, Phil asked for one)")
+        big = c if (c and m["pf"] < 6 and c["pf"] >= 6) else m
+        print(f"  Large-dataset test    : {big['name']}  ({big['points']:,} points, Phil asked for one)")
         print(f"  Do not publish        : the numbered files individually")
     else:
         print("  No merged file found. Publish the numbered files as one tileset by passing them all")

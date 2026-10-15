@@ -110,6 +110,10 @@
       <option value="intensity">Intensity (greyscale)</option>
     </select>
     <div class="row" style="margin-top:8px">
+      <label for="iscale">Intensity white point</label>
+      <input type="text" id="iscale" value="65535" style="width:90px;flex:none">
+    </div>
+    <div class="row">
       <label for="size">Point size</label>
       <input type="range" id="size" min="1" max="8" step="1" value="2" style="flex:1">
     </div>
@@ -252,7 +256,7 @@ ${branches}
       lightingModel: unlit,
       fragmentShaderText: `
 void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
-  material.diffuse = vec3(clamp(fsInput.attributes.intensity / ${INTENSITY_SCALE.toFixed(1)}, 0.0, 1.0));
+  material.diffuse = vec3(clamp(fsInput.attributes.intensity / ${intensityScale.toFixed(1)}, 0.0, 1.0));
 }`,
     });
   }
@@ -266,9 +270,12 @@ void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
   });
 }
 
-// Display scale for intensity. LAS intensity is 16-bit but most sensors use
-// a fraction of that range. Adjust if the greyscale looks washed out or dark.
-const INTENSITY_SCALE = 2600;
+// Display scale for intensity: the value shown as white. LAS intensity is
+// 16-bit but sensors use very different ranges (DJI Terra stretches 8-bit
+// reflectivity to 0..65280; other tools stay in the low thousands). The
+// viewer sets this automatically from a sample tile (99th percentile) and
+// the "Intensity white point" box lets you override it.
+let intensityScale = 65535;
 
 function buildStyle(mode) {
   if (mode === "classification") {
@@ -279,7 +286,7 @@ function buildStyle(mode) {
     return { color: { conditions } };
   }
   if (mode === "intensity") {
-    return { color: `color('white') * (\${intensity} / ${INTENSITY_SCALE}.0)` };
+    return { color: `color('white') * (\${intensity} / ${intensityScale.toFixed(1)})` };
   }
   return {};  // source RGB
 }
@@ -351,7 +358,22 @@ async function detectAttributes(tilesetUrl) {
       const ftJson = dv.getUint32(12, true), ftBin = dv.getUint32(16, true);
       const btJson = dv.getUint32(20, true);
       if (!btJson) return [];
-      return Object.keys(JSON.parse(text(28 + ftJson + ftBin, btJson)));
+      const ft = JSON.parse(text(28, ftJson));
+      const bt = JSON.parse(text(28 + ftJson + ftBin, btJson));
+      // Auto-scale intensity from this tile's values (99th percentile).
+      const spec = bt.intensity;
+      if (spec && spec.componentType === "UNSIGNED_SHORT") {
+        const binStart = 28 + ftJson + ftBin + btJson + (spec.byteOffset || 0);
+        const n = ft.POINTS_LENGTH, vals = new Array(n);
+        for (let i = 0; i < n; i++) vals[i] = dv.getUint16(binStart + 2 * i, true);
+        vals.sort((a, b) => a - b);
+        const p99 = vals[Math.floor(n * 0.99)] || 0;
+        if (p99 > 0) {
+          intensityScale = p99;
+          $("iscale").value = String(p99);
+        }
+      }
+      return Object.keys(bt);
     }
     if (magic === "glTF") {
       const chunkLen = dv.getUint32(12, true);
@@ -466,11 +488,22 @@ $("load").onclick = loadTileset;
 $("reset").onclick = () => tileset && viewer.zoomTo(tileset);
 $("mode").onchange = applyStyle;
 $("size").oninput = applyStyle;
+$("iscale").onchange = (e) => {
+  const v = Number(e.target.value);
+  if (v > 0) { intensityScale = v; applyStyle(); }
+};
 // Lower screen-space error = more detail = more points on screen.
 $("budget").oninput = (e) => {
   if (tileset) tileset.maximumScreenSpaceError = 32 - Number(e.target.value);
 };
 $("url").addEventListener("keydown", (e) => { if (e.key === "Enter") loadTileset(); });
+
+// index.html?tileset=../results/<name>/tiles/tileset.json loads straight away.
+const fromQuery = new URLSearchParams(location.search).get("tileset");
+if (fromQuery) {
+  $("url").value = fromQuery;
+  loadTileset();
+}
 </script>
 </body>
 </html>

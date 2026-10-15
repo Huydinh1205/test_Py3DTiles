@@ -1,5 +1,7 @@
 # py3dtiles Feasibility Test Harness
 
+> **Just want to run it?** Open [`RUN_COMMANDS.md`](RUN_COMMANDS.md): copy-paste PowerShell blocks with the paths already filled in.
+
 Test bench for the LiDAR half of Phil's "first principles" assessment
 (email of 15 Oct 2026, *Before we proceed with purchasing FME*).
 

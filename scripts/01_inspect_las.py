@@ -67,6 +67,34 @@ ASPRS_CLASSES = {
     18: "High noise",
 }
 
+# Plain-English meaning of each standard LAS dimension.
+DIMENSION_MEANINGS = {
+    "X": "Easting",
+    "Y": "Northing",
+    "Z": "Elevation",
+    "intensity": "Strength of the returned laser pulse",
+    "return_number": "Which return of its pulse this point is (1 = first)",
+    "number_of_returns": "How many returns its pulse produced in total",
+    "synthetic": "Flag: point created by software, not measured",
+    "key_point": "Flag: model key point, keep when thinning",
+    "withheld": "Flag: point should be ignored",
+    "overlap": "Flag: point lies in a flight-line overlap",
+    "scanner_channel": "Which scanner channel recorded it",
+    "scan_direction_flag": "Mirror direction when recorded",
+    "edge_of_flight_line": "Flag: last point before the scan reverses",
+    "classification": "ASPRS class code (2 ground, 3-5 vegetation, 6 building...)",
+    "classification_flags": "Packed synthetic/key-point/withheld/overlap bits",
+    "user_data": "Free byte, software specific",
+    "scan_angle_rank": "Scan angle, whole degrees",
+    "scan_angle": "Scan angle, 0.006 degree steps",
+    "point_source_id": "Flight line or source file ID",
+    "gps_time": "Time the point was recorded (GPS seconds)",
+    "red": "Colour, red channel (16-bit)",
+    "green": "Colour, green channel (16-bit)",
+    "blue": "Colour, blue channel (16-bit)",
+    "nir": "Near-infrared channel",
+}
+
 # Point formats where 'classification' is its own byte and py3dtiles can read it.
 MODERN_POINT_FORMATS = (6, 7, 8, 9, 10)
 
@@ -131,6 +159,27 @@ def inspect(path, sample_limit=5_000_000):
         n_sample = min(int(header.point_count), sample_limit)
         pts = reader.read_points(n_sample)
         report["sampled_points"] = int(n_sample)
+
+    # Every dimension in the file, with real values from the sample.
+    dims = []
+    for name in pf.dimension_names:
+        # X/Y/Z are stored as scaled integers; report real-world coordinates.
+        vals = np.asarray(getattr(pts, name.lower())) if name in ("X", "Y", "Z") else np.asarray(pts[name])
+        info = {
+            "name": name,
+            "dtype": str(vals.dtype),
+            "min": float(vals.min()) if vals.size else None,
+            "max": float(vals.max()) if vals.size else None,
+            "distinct": int(len(np.unique(vals))) if vals.size else 0,
+            "usable_extra_field": name in usable,
+            "meaning": DIMENSION_MEANINGS.get(name, "Extra dimension (vendor or user defined)"),
+        }
+        # 8-bit sensor values stretched to 16-bit (x256) show up as all
+        # multiples of 256, e.g. a maximum of 65280 = 255 x 256.
+        if vals.dtype == np.uint16 and vals.size and vals.max() > 255:
+            info["stretched_8bit"] = bool(np.mean(vals % 256 == 0) > 0.99)
+        dims.append(info)
+    report["dimensions"] = dims
 
     # Classification histogram.
     if "classification" in report["dimension_names"]:
@@ -265,6 +314,25 @@ def print_report(r):
             print("             py3dtiles. Flag it separately in the assessment.")
     else:
         print("    No classification dimension present.")
+
+    print("\n  -- All dimensions in the file (values from the sample) --")
+    print(f"  {'dimension':<21}{'min':>14}{'max':>16}{'distinct':>10}  export  meaning")
+    for d in r["dimensions"]:
+        fmt = (lambda v: f"{v:,.2f}") if d["dtype"].startswith("float") else (lambda v: f"{v:,.0f}")
+        lo = fmt(d["min"]) if d["min"] is not None else "-"
+        hi = fmt(d["max"]) if d["max"] is not None else "-"
+        # Position and colour are always written by py3dtiles, no flag needed.
+        flag = "auto" if d["name"] in ("X", "Y", "Z", "red", "green", "blue") else (
+            "yes" if d["usable_extra_field"] else "-")
+        note = d["meaning"]
+        if d["distinct"] == 1:
+            note += "  [constant, carries no information]"
+        if d.get("stretched_8bit"):
+            note += "  [8-bit values x256]"
+        print(f"  {d['name']:<21}{lo:>14}{hi:>16}{d['distinct']:>10,}  {flag:^6}  {note}")
+    print("  export: auto = always in the tileset (position, RGB)")
+    print("          yes  = can be added with --extra-fields")
+    print("          -    = cannot be exported by py3dtiles (bit-packed field)")
 
     print("\n  -- py3dtiles --extra-fields compatibility --")
     print("  A field can only be exported if its name appears in BOTH")
