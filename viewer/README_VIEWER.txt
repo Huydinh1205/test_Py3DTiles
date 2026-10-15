@@ -25,7 +25,7 @@ folder has to be served over HTTP. One command does it.
 WHAT TO CHECK, AND WHY
 ======================
 
-Phil's brief asks us to assess "visual quality, processing resources, output
+The assessment covers "visual quality, processing resources, output
 size, browser performance and the amount of manual intervention needed".
 The scripts cover everything except the last two visual items. This is where
 those get answered.
@@ -79,6 +79,6 @@ NOTES
 - CesiumJS 1.145.0 is loaded from a CDN, so the machine needs internet access
   the first time. To run fully offline, download the Cesium build and change
   the two CDN URLs at the top of index.html to local paths.
-- The real BunjilView viewer will have terrain, imagery and other layers
+- The production viewer will have terrain, imagery and other layers
   competing for the same GPU budget, so treat these numbers as an optimistic
   upper bound and say so in the assessment.

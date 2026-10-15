@@ -9,7 +9,7 @@
 <!--
   Minimal CesiumJS harness for the py3dtiles feasibility test.
 
-  It answers the two questions in Phil's brief that a script cannot:
+  It answers the two questions that a script cannot:
     - "visual quality" and "browser performance" in our actual viewer
     - whether the classification attribute is usable for styling and
       filtering once the tileset is loaded
@@ -90,7 +90,7 @@
 
 <div id="panel">
   <h1>py3dtiles Tileset Inspector</h1>
-  <p class="sub">BunjilView feasibility test, Oct 2026</p>
+  <p class="sub">py3dtiles feasibility test</p>
 
   <div id="status">Enter a tileset.json URL and press Load.</div>
 
@@ -220,7 +220,7 @@ function setStatus(msg, kind) {
 //                         by 255 in an UNLIT CustomShader restores it.
 //
 // So this viewer picks the mechanism from the tileset's asset.version. The
-// production BunjilView viewer would need the same CustomShader approach if
+// production viewer would need the same CustomShader approach if
 // we published 3D Tiles 1.1. Recommendation: stay on 3D Tiles 1.0 (.pnts),
 // which renders correctly with no custom code.
 // ---------------------------------------------------------------------------

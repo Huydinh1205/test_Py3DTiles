@@ -2,8 +2,11 @@ Drop the LiDAR test files in this folder.
 
 For the feasibility assessment we need at least:
   1. One small/medium dataset  (fast iteration, sanity check)
-  2. One realistically large dataset (Phil explicitly asked for this)
+  2. One realistically large dataset
 
 Accepted formats: .las, .laz
 Use post-processed output from DJI Terra, i.e. the same files that would
-normally be published to BunjilView.
+normally be published to the viewer.
+
+You do NOT have to copy data here. Every script accepts a full path to a
+file anywhere, including a network drive. This folder is ignored by git.

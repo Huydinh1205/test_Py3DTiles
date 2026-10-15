@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Step 3 - Run py3dtiles convert and measure what Phil asked us to measure.
+Step 3 - Run py3dtiles convert (the tiling step) and measure it.
 
 Captures, for each run:
   - wall clock processing time

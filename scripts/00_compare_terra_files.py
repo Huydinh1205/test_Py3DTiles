@@ -351,7 +351,7 @@ def main():
     if merged_las:
         m = merged_las[0]
         c = merged_copc[0] if merged_copc else None
-        print(f"  Publish to BunjilView : the merged point cloud, one dataset for the whole site.")
+        print(f"  Publish               : the merged point cloud, one dataset for the whole site.")
         if c and m["pf"] < 6 and c["pf"] >= 6:
             print(f"  Convert from          : {c['name']}  (already pf{c['pf']}, skips step 2)")
             print(f"  Cross-check against   : {m['name']}  (source of truth)")
@@ -361,7 +361,7 @@ def main():
             smallest = min(parts, key=lambda f: f["points"])
             print(f"  Quick test first on   : {smallest['name']}  ({smallest['points']:,} points, fastest)")
         big = c if (c and m["pf"] < 6 and c["pf"] >= 6) else m
-        print(f"  Large-dataset test    : {big['name']}  ({big['points']:,} points, Phil asked for one)")
+        print(f"  Large-dataset test    : {big['name']}  ({big['points']:,} points)")
         print(f"  Do not publish        : the numbered files individually")
     else:
         print("  No merged file found. Publish the numbered files as one tileset by passing them all")

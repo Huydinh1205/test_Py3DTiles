@@ -1,13 +1,13 @@
 # py3dtiles Feasibility Test Harness
 
-> **Just want to run it?** Open [`RUN_COMMANDS.md`](RUN_COMMANDS.md): copy-paste PowerShell blocks with the paths already filled in.
+> **Just want to run it?** Open [`RUN_COMMANDS.md`](RUN_COMMANDS.md): copy-paste PowerShell blocks. Set your own paths once in block B.
 
-Test bench for the LiDAR half of Phil's "first principles" assessment
-(email of 15 Oct 2026, *Before we proceed with purchasing FME*).
+Test bench for publishing drone LiDAR point clouds to a CesiumJS viewer.
 
 **Question being answered:** can processed LAS/LAZ point clouds be published
-to BunjilView's CesiumJS viewer using py3dtiles plus a small amount of glue
-code, instead of buying FME, and do the attributes we need survive the trip?
+to a CesiumJS viewer using py3dtiles plus a small amount of glue code,
+instead of a commercial conversion tool, and do the attributes we need
+survive the trip?
 
 ---
 
@@ -54,15 +54,14 @@ LAS 1.4 pf7, --extra-fields classification
 **Consequences for the assessment**
 
 1. Whether preprocessing is needed depends entirely on the point format DJI
-   Terra writes. Check that first, do not assume either way. This is exactly
-   Phil's "assess whether any additional preprocessing is actually needed
-   rather than adding it by default".
+   Terra writes. Check that first, do not assume either way. In other words,
+   assess whether any additional preprocessing is actually needed rather
+   than adding it by default.
 2. If preprocessing is needed it is a lossless LAS 1.4 rewrite, roughly five
    lines of laspy. It does not justify a separate conversion platform.
 3. The publishing service **must** validate output by reading attributes back
    out and comparing them against the source. Checking that the converter
-   exited cleanly is not enough. This supports Phil's requirement that
-   "incomplete or failed datasets must not become visible to customers".
+   exited cleanly is not enough. Incomplete or failed datasets must never become visible to end users.
 
 ---
 
@@ -292,7 +291,7 @@ more than the source, that is the overview tiles, not a defect.
 | `--srs_in <epsg>` | Numeric part only, e.g. `7856`, not `EPSG:7856`. Required when the file declares no CRS |
 | `--extra-fields <name>` | Repeat per attribute. Each one adds bytes per point. In testing, adding classification and intensity grew the tileset about 21 percent |
 | `--color_scale 256` | Needed when source RGB is 8-bit, otherwise the tileset renders black. Step 1 detects this and `run_test.py` applies it automatically |
-| `--spec-version 1.1` | Emits `.glb` instead of `.pnts`. **Do not use for BunjilView yet**, see below |
+| `--spec-version 1.1` | Emits `.glb` instead of `.pnts`. **Do not use yet**, see below |
 | `--jobs` | Defaults to all cores in this harness. py3dtiles' own default is 2, which understates throughput |
 
 ---
@@ -311,7 +310,7 @@ decompression.
 py3dtiles subprocess, which fixes it. Windows and macOS start workers with
 spawn rather than fork, so they should not hit this, but a production
 publishing service on a Linux worker would. Record it in the assessment as a
-small, known integration detail for Tri's team, not a blocker.
+small, known integration detail for the development team, not a blocker.
 
 Tested: a 670,000-point COPC file converts in 3.7 s with an exact
 attribute match after the fix.
@@ -329,7 +328,7 @@ does not display it correctly without custom code:
 | Workaround | None needed | An UNLIT `CustomShader` reading `fsInput.attributes.color_0 / 255.0` and `fsInput.attributes.classification`. The viewer here applies it automatically |
 | Output size | baseline | about the same in testing |
 
-Choosing 1.1 would therefore add CustomShader work to the BunjilView
+Choosing 1.1 would therefore add CustomShader work to the production
 viewer for no measurable benefit. Recommend 1.0 until py3dtiles writes
 normalised colours and structural metadata.
 
@@ -343,7 +342,7 @@ assessment as open items:
 - **Is the source even classified?** If DJI Terra output carries only codes
   0 and 1, the preservation question is moot and the gap is upstream in
   post-processing. Step 1 flags this.
-- **Does BunjilView need intensity at all?** Confirm with the analysts
+- **Does the viewer need intensity at all?** Confirm with the analysts
   before paying for it in tileset size.
 - **Real-world viewer performance.** The numbers here are measured with the
   globe and imagery disabled, so they are an optimistic upper bound.

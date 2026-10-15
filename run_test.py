@@ -63,6 +63,10 @@ def main():
     ap.add_argument("--spec-version", choices=["1.0", "1.1"], default="1.0")
     ap.add_argument("--jobs", type=int, help="py3dtiles parallel workers")
     ap.add_argument("--color-scale", type=int, help="Pass 256 if RGB is 8-bit")
+    ap.add_argument("--out-root", default=str(ROOT / "results"),
+                    help="Folder that receives all outputs (default: results/ inside this "
+                         "harness). Each run gets its own subfolder <out-root>/<name>/. "
+                         "Nothing is ever written next to the input file.")
     ap.add_argument("--name",
                     help="Results subfolder name (default: the input file name). "
                          "Use different names to keep several runs of the same file.")
@@ -75,7 +79,8 @@ def main():
     if not src.exists():
         sys.exit(f"Input file not found: {src}")
 
-    run_dir = ROOT / "results" / (args.name or src.stem)
+    out_root = Path(args.out_root).resolve()
+    run_dir = out_root / (args.name or src.stem)
     run_dir.mkdir(parents=True, exist_ok=True)
     started = time.time()
 
@@ -202,9 +207,9 @@ def main():
     print("    04_validation.json  per-attribute pass/fail detail")
     print("    tiles/              the tileset itself")
     print("\n  To eyeball it in a browser, from the test_Py3DTiles folder run:")
-    print("    python -m http.server 8080")
-    print("  then open http://localhost:8080/viewer/index.html and load:")
-    print(f"    ../results/{run_dir.name}/tiles/tileset.json")
+    print(f'    python scripts/serve_viewer.py --results "{out_root}"')
+    print("  then open:")
+    print(f"    http://localhost:8080/viewer/index.html?tileset=../results/{run_dir.name}/tiles/tileset.json")
     print("=" * 78)
 
     sys.exit(rc)

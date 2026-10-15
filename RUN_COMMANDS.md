@@ -3,8 +3,12 @@
 Every block below can be pasted into PowerShell as is. Run **block A once**,
 then **block B every time you open a new terminal**, then any of the steps.
 
-Paths are pre-filled for the Copes Hut Dec 2025 dataset. To test another
-dataset, change `$DATA` in block B only.
+Block B is the only place with paths. Fill it in once, keep your filled-in
+copy outside the repo (for example as `RUN_COMMANDS.local.md`, which git
+ignores), and never commit real paths.
+
+The source data is read where it is, nothing is copied. All outputs go to
+`results\` inside this folder, which git also ignores.
 
 ---
 
@@ -14,8 +18,7 @@ Only the first time, or after moving the folder (a venv cannot be moved,
 it must be recreated).
 
 ```powershell
-# Where the harness lives. Keep it outside OneDrive.
-cd C:\work\test_Py3DTiles
+cd "<path to test_Py3DTiles>"
 
 # Python 3.11 (NOT 3.14, see README "Install")
 py -3.11 -m venv .venv
@@ -30,91 +33,105 @@ py -3.11 -m venv .venv
 ## B. Every new terminal: set the paths
 
 ```powershell
-cd C:\work\test_Py3DTiles
+cd "<path to test_Py3DTiles>"
 $PY   = ".venv\Scripts\python.exe"
-$DATA = "Z:\NESP-25007\NESP - December 2025\NESP - Lidar\Copes Hut-Dec25\lidars\terra_las"
-$FILE = "C:\work\data\cloud_merged.copc.laz"
+$DATA = "<path to the DJI Terra terra_las folder>"
+$FILE = "$DATA\cloud_merged.copc.laz"
 ```
-
-`$DATA` is the DJI Terra output folder on the network drive. `$FILE` is the
-local copy that gets converted (block 1).
 
 ---
 
 ## 0. What are the files in the Terra folder?
 
-Read only, nothing is written to the Z: drive.
+Read only, nothing is written next to the data.
 
 ```powershell
 & $PY scripts\00_compare_terra_files.py $DATA --json results\00_terra_folder.json
 ```
 
-## 1. Copy the file to the local disk
-
-Timings over a network drive measure the network, not the conversion.
-
-```powershell
-New-Item -ItemType Directory -Force -Path C:\work\data | Out-Null
-Copy-Item -LiteralPath "$DATA\cloud_merged.copc.laz" -Destination C:\work\data\ -Force
-"{0}  {1:N1} MB" -f (Get-Item $FILE).Name, ((Get-Item $FILE).Length/1MB)
-```
-
-## 2. Inspect the file: header, classes, every attribute
+## 1. Inspect the file: header, classes, every attribute
 
 This is the output to read when deciding which attributes to keep.
 
 ```powershell
-& $PY scripts\01_inspect_las.py $FILE --json results\01_inspect_copc.json
+& $PY scripts\01_inspect_las.py $FILE --json results\01_inspect.json
 ```
 
 Look at the table **All dimensions in the file**:
 keep an attribute only if `export` is `yes`, it is not marked `constant`,
-and the analysts actually use it in BunjilView.
+and the analysts actually use it in the viewer.
 
-## 3. Full test, classification only
+## 2. Full test, classification only
 
-Tiling + timing + memory + exact validation, in one go.
+Tiling + timing + memory + exact validation, in one go. Output:
+`results\merged_class\`.
 
 ```powershell
-& $PY run_test.py $FILE --fields classification --name copes_class
+& $PY run_test.py $FILE --fields classification --name merged_class
 ```
 
-## 4. Full test, classification + intensity
+## 3. Full test, classification + intensity
+
+Output: `results\merged_class_int\`.
 
 ```powershell
-& $PY run_test.py $FILE --fields classification intensity --name copes_class_int
+& $PY run_test.py $FILE --fields classification intensity --name merged_class_int
 ```
 
-## 5. What does intensity cost?
+## 4. What does intensity cost?
 
-Compares run 3 and run 4.
+Compares run 2 and run 3.
 
 ```powershell
-$a = Get-Content results\copes_class\03_benchmark.json -Raw | ConvertFrom-Json
-$b = Get-Content results\copes_class_int\03_benchmark.json -Raw | ConvertFrom-Json
+$a = Get-Content results\merged_class\03_benchmark.json -Raw | ConvertFrom-Json
+$b = Get-Content results\merged_class_int\03_benchmark.json -Raw | ConvertFrom-Json
 "classification only        : {0,8:N1} MB  {1,7:N1} s  peak {2,6:N0} MB" -f ($a.output_bytes/1MB), $a.elapsed_seconds, ($a.peak_memory_bytes/1MB)
 "classification + intensity : {0,8:N1} MB  {1,7:N1} s  peak {2,6:N0} MB" -f ($b.output_bytes/1MB), $b.elapsed_seconds, ($b.peak_memory_bytes/1MB)
 "intensity adds             : {0,8:N1} MB  ({1:N1} %)" -f (($b.output_bytes-$a.output_bytes)/1MB), (100*($b.output_bytes-$a.output_bytes)/$a.output_bytes)
 ```
 
-## 6. Look at it in the browser
+Note: the source file is read over the network, so the times include
+network transfer. That is realistic if production processing also reads
+from the shared drive; say so in the assessment either way.
 
-Starts a small web server in its own window (close that window to stop it)
-and opens the viewer with the tileset already loaded.
+## 5. Look at it in the browser
+
+Starts the viewer server in its own window (close that window to stop it)
+and opens the viewer with the tileset already loaded. The server only
+listens on this computer, so nobody else on the network can browse it.
 
 ```powershell
-Start-Process -FilePath (Resolve-Path $PY).Path -ArgumentList "-m http.server 8080" -WorkingDirectory (Get-Location).Path
+Start-Process -FilePath (Resolve-Path $PY).Path -ArgumentList "scripts\serve_viewer.py --port 8080" -WorkingDirectory (Get-Location).Path
 Start-Sleep -Seconds 2
-Start-Process "http://localhost:8080/viewer/index.html?tileset=../results/copes_class_int/tiles/tileset.json"
+Start-Process "http://localhost:8080/viewer/index.html?tileset=../results/merged_class_int/tiles/tileset.json"
 ```
 
-To view the other run, change `copes_class_int` to `copes_class` in the
+To view the other run, change `merged_class_int` to `merged_class` in the
 last line. In the viewer, switch **Colour by** to Classification and
 Intensity, and note the numbers in the Performance panel.
 
 ---
 
-## Running steps 3 and 4 by hand (optional)
+## Where everything ends up
+
+```
+results\
+  00_terra_folder.json        step 0
+  01_inspect.json             step 1
+  merged_class\               step 2
+    01_inspect.json             source file properties and verdict
+    03_benchmark.json           time, peak memory, output size
+    04_validation.json          per-attribute pass/fail
+    tiles\                      the 3D Tiles tileset (tileset.json + points\)
+  merged_class_int\           step 3, same layout
+```
+
+To write somewhere else, add `--out-root "<folder>"` to `run_test.py`, then
+start the viewer server with `--results "<folder>"`.
+
+---
+
+## Running the tiling and validation steps by hand (optional)
 
 `run_test.py` already does this. Use these only to repeat one part.
 
@@ -128,8 +145,8 @@ Intensity, and note the numbers in the Performance panel.
 
 ## A numbered tile instead (small, quick check)
 
-`cloud1.las` is LAS 1.2, so run_test rewrites it to LAS 1.4 first (step 2)
-automatically.
+`cloud1.las` is LAS 1.2, so run_test rewrites it to LAS 1.4 first
+automatically. The rewritten copy goes into `results\`, not next to the data.
 
 ```powershell
 & $PY run_test.py "$DATA\cloud1.las" --fields classification intensity --name cloud1_quick
@@ -141,8 +158,8 @@ automatically.
 
 | Symptom | Fix |
 |---|---|
-| `& : The term '.venv\Scripts\python.exe' is not recognized` | Block B was not run in this terminal, or you are not in `C:\work\test_Py3DTiles` |
+| `& : The term '.venv\Scripts\python.exe' is not recognized` | Block B was not run in this terminal, or the `cd` path is wrong |
 | `mapbox_earcut` / `nmake` error during install | The venv was made with Python 3.14. Delete `.venv`, rerun block A |
-| Step 3 prints nothing for many minutes | Check the file is local (block 1), not on Z: |
-| Viewer says "Failed to load" | The web server window from step 6 is not running, or the run name in the URL is wrong |
+| Step 2 prints nothing for many minutes | Large file over a slow network link. Check the drive is reachable, then wait |
+| Viewer says "Failed to load" | The server window from step 5 is not running, or the run name in the URL is wrong |
 | Viewer Intensity is all white or all black | Type a different number in **Intensity white point** |

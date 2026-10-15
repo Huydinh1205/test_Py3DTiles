@@ -1,0 +1,20 @@
+# Never commit outputs: tiles are derived from survey data, and the JSON
+# reports record full input paths (network drives included).
+results/
+
+# Survey data dropped into data/ for testing.
+data/*
+!data/PUT_LAS_FILES_HERE.txt
+*.las
+*.laz
+
+# Local Python environment.
+.venv/
+__pycache__/
+*.pyc
+
+# Personal copy of the run commands with real paths filled in.
+*.local.md
+*.local.ps1
+
+.DS_Store

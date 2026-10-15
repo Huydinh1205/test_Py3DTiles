@@ -4,8 +4,8 @@ Step 1 - Inspect a LAS/LAZ file before conversion.
 
 Purpose
 -------
-Answer Phil's question "whether any additional preprocessing is actually
-needed rather than adding it by default".
+Answer the question: is any additional preprocessing actually needed,
+rather than adding it by default?
 
 The only thing that decides this is the LAS point format:
 
