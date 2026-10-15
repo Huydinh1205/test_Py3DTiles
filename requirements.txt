@@ -1,3 +1,10 @@
+# Python 3.10 to 3.13. NOT 3.14.
+# py3dtiles 12.1.1 pins mapbox_earcut==1.0.3, which ships prebuilt Windows
+# wheels for cp39-cp313 only. On 3.14 pip falls back to compiling it from
+# source, which fails without Visual Studio C++ build tools ("nmake" not
+# found / CMAKE_CXX_COMPILER not set). Verified: on Windows x64 with
+# Python 3.11 every package below installs from a prebuilt wheel.
+
 # Core conversion tool (CLI + Python library)
 py3dtiles[las]==12.1.1
 

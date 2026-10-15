@@ -66,13 +66,56 @@ LAS 1.4 pf7, --extra-fields classification
 
 ## Install
 
-Needs Python 3.9 or newer.
+**Use Python 3.10, 3.11, 3.12 or 3.13. Not 3.14.** py3dtiles pins
+`mapbox_earcut==1.0.3`, which has no prebuilt Windows wheel for 3.14, so pip
+tries to compile it and fails with `'nmake' ... no such file or directory` /
+`CMAKE_CXX_COMPILER not set`. Python 3.11 installs everything from prebuilt
+wheels, nothing to compile.
+
+**Keep the folder out of OneDrive.** A virtual environment is thousands of
+small files, and `results/` fills up with hundreds of tile files per run.
+OneDrive tries to sync all of it and can lock files mid-write. Use something
+like `C:\work\test_Py3DTiles`.
+
+### Windows (PowerShell)
+
+```powershell
+cd C:\work\test_Py3DTiles
+
+# See which Pythons are installed. Old launcher: py -0p   New install manager: py list
+py -0p
+
+# Create the environment with 3.11 specifically
+py -3.11 -m venv .venv
+
+# No activation needed: call the environment's own python directly
+.venv\Scripts\python.exe -m pip install -r requirements.txt
+.venv\Scripts\python.exe run_test.py "D:\survey\terra_lidar\cloud_merged.copc.laz"
+```
+
+Calling `.venv\Scripts\python.exe` directly is equivalent to activating the
+environment, and the harness launches every sub-step with that same
+interpreter, so nothing else is needed. If `py -3.11` is not found, use the
+full path that `py -0p` printed, e.g.
+`C:\Users\<you>\AppData\Local\Programs\Python\Python311\python.exe -m venv .venv`.
+
+If you do want to activate: the script is `.venv\Scripts\Activate.ps1`
+(there is no `bin/activate` on Windows). If PowerShell refuses with
+"running scripts is disabled on this system", allow it for the current
+window only:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.venv\Scripts\Activate.ps1
+```
+
+### macOS / Linux
 
 ```bash
 cd test_Py3DTiles
-python -m venv .venv
-source .venv/bin/activate          # Windows: .venv\Scripts\activate
-pip install -r requirements.txt
+python3.11 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python run_test.py /path/to/cloud_merged.copc.laz
 ```
 
 `.laz` support comes from the `lazrs` backend in `requirements.txt`. Without

@@ -30,7 +30,7 @@ This script performs a lossless rewrite:
 Usage
 -----
     python scripts/02_prepare_las.py data/input.las
-    python scripts/02_prepare_las.py data/input.las -o data/input_las14.las
+    python scripts/02_prepare_las.py "D:/survey/terra_lidar/cloud_merged.las" -o results/cloud_merged_las14.las
 """
 
 import argparse
@@ -195,7 +195,7 @@ def main():
         description="Rewrite a legacy LAS file as LAS 1.4 pf 6/7 so py3dtiles can export classification."
     )
     ap.add_argument("las", help="Source .las or .laz file")
-    ap.add_argument("-o", "--out", help="Output path (default: <input>_las14.las)")
+    ap.add_argument("-o", "--out", help="Output path (default: results/<input name>_las14.las inside this harness)")
     ap.add_argument(
         "--verify",
         action="store_true",
@@ -205,7 +205,18 @@ def main():
     args = ap.parse_args()
 
     src = Path(args.las)
-    dst = Path(args.out) if args.out else src.with_name(src.stem + "_las14.las")
+    # Default to this harness's results/ folder, never next to the source.
+    # The source usually lives in a shared company folder (e.g. terra_lidar)
+    # that a test run must not write into.
+    if args.out:
+        dst = Path(args.out)
+    else:
+        stem = src.name
+        for suffix in (".copc.laz", ".laz", ".las"):
+            if stem.lower().endswith(suffix):
+                stem = stem[: -len(suffix)]
+                break
+        dst = Path(__file__).resolve().parent.parent / "results" / f"{stem}_las14.las"
 
     result = prepare(src, dst)
     if result and args.verify:
