@@ -245,6 +245,119 @@ def summary_stats(values):
     }
 
 
+def read_pnts_positions(path):
+    """float64 Nx3 positions in the tile's own frame (RTC_CENTER applied)."""
+    raw = Path(path).read_bytes()
+    if raw[:4] != b"pnts":
+        return None
+    _m, _v, _l, ft_json_len, ft_bin_len, _bj, _bb = struct.unpack("<4sIIIIII", raw[:28])
+    ft = json.loads(raw[28:28 + ft_json_len])
+    if "POSITION" not in ft:
+        return None  # quantized positions are not produced by py3dtiles
+    n = int(ft["POINTS_LENGTH"])
+    start = 28 + ft_json_len + ft["POSITION"].get("byteOffset", 0)
+    pos = np.frombuffer(raw, dtype=np.float32, count=n * 3, offset=start).reshape(n, 3)
+    pos = pos.astype(np.float64)
+    if "RTC_CENTER" in ft:
+        pos += np.asarray(ft["RTC_CENTER"], dtype=np.float64)
+    return pos
+
+
+def tile_positions_ecef(tiles_dir):
+    """Every point of the tileset in ECEF (EPSG:4978), overview tiles excluded.
+
+    Walks tileset.json accumulating each tile's 4x4 transform (stored
+    column-major) from the root down, exactly as a 3D Tiles viewer does.
+    Only .pnts content is decoded; returns None for .glb tilesets.
+    """
+    tiles_dir = Path(tiles_dir)
+    data = json.loads((tiles_dir / "tileset.json").read_text())
+    overviews = overview_tile_paths(tiles_dir)
+    chunks, saw_glb = [], False
+
+    def walk(node, parent):
+        m = parent
+        if node.get("transform"):
+            m = parent @ np.array(node["transform"], dtype=np.float64).reshape(4, 4).T
+        content = node.get("content") or {}
+        uri = content.get("uri") or content.get("url")
+        if uri:
+            path = (tiles_dir / uri).resolve()
+            nonlocal saw_glb
+            if path.suffix == ".glb":
+                saw_glb = True
+            elif path not in overviews:
+                local = read_pnts_positions(path)
+                if local is not None and len(local):
+                    homo = np.hstack([local, np.ones((len(local), 1))])
+                    chunks.append((homo @ m.T)[:, :3])
+        for child in node.get("children") or []:
+            walk(child, m)
+
+    walk(data["root"], np.eye(4))
+    if saw_glb or not chunks:
+        return None
+    return np.vstack(chunks)
+
+
+def source_xyz(las_path, chunk_size=5_000_000):
+    """Real-world coordinates of every source point, read sequentially."""
+    xs, ys, zs = [], [], []
+    with laspy.open(str(las_path)) as reader:
+        for chunk in reader.chunk_iterator(chunk_size):
+            xs.append(np.asarray(chunk.x)); ys.append(np.asarray(chunk.y)); zs.append(np.asarray(chunk.z))
+    return np.concatenate(xs), np.concatenate(ys), np.concatenate(zs)
+
+
+def check_geometry(tiles_dir, source, srs_in, tolerance):
+    """Do the tile points sit where the source points are?
+
+    Converts tile positions from ECEF back to the source CRS and compares
+    them with the source: the extent, and (when counts match) every sorted
+    X, Y and Z value. Wrong reads, shuffled blocks or reprojection mistakes
+    all show up as differences far above the float32 noise (well under 1 cm).
+    """
+    from pyproj import CRS, Transformer
+
+    ecef = tile_positions_ecef(tiles_dir)
+    if ecef is None:
+        return {"status": "skipped", "reason": "only .pnts tilesets (3D Tiles 1.0) are decoded"}
+
+    crs = None
+    if srs_in:
+        crs = CRS.from_epsg(int(srs_in))
+    else:
+        with laspy.open(str(source)) as reader:
+            crs = reader.header.parse_crs()
+    if crs is None:
+        return {"status": "skipped", "reason": "source CRS unknown, pass --srs-in"}
+
+    to_src = Transformer.from_crs(CRS.from_epsg(4978), crs, always_xy=True)
+    tx, ty, tz = to_src.transform(ecef[:, 0], ecef[:, 1], ecef[:, 2])
+    del ecef
+    sx, sy, sz = source_xyz(source)
+
+    result = {"tile_points": int(len(tx)), "source_points": int(len(sx)), "axes": {}}
+    ok = True
+    for name, s_vals, t_vals in (("X", sx, tx), ("Y", sy, ty), ("Z", sz, tz)):
+        t_vals = np.asarray(t_vals)
+        extent_err = max(abs(float(s_vals.min()) - float(t_vals.min())),
+                         abs(float(s_vals.max()) - float(t_vals.max())))
+        axis = {"source_min": float(s_vals.min()), "source_max": float(s_vals.max()),
+                "tile_min": float(t_vals.min()), "tile_max": float(t_vals.max()),
+                "extent_error_m": extent_err}
+        if len(s_vals) == len(t_vals):
+            axis["max_sorted_error_m"] = float(np.max(np.abs(np.sort(s_vals) - np.sort(t_vals))))
+            axis_ok = axis["max_sorted_error_m"] <= tolerance
+        else:
+            axis_ok = extent_err <= tolerance
+        axis["ok"] = bool(axis_ok)
+        ok &= axis_ok
+        result["axes"][name] = axis
+    result["status"] = "pass" if ok else "fail"
+    return result
+
+
 def check_tileset_json(tiles_dir):
     path = Path(tiles_dir) / "tileset.json"
     if not path.exists():
@@ -276,6 +389,12 @@ def main():
     ap.add_argument("--tolerance", type=float, default=1.0,
                     help="Fallback mode only: allowed difference, percentage points "
                          "for categorical fields, percent for statistics (default 1.0)")
+    ap.add_argument("--srs-in", help="Source EPSG for the position check, if the file has no CRS")
+    ap.add_argument("--geometry-tolerance", type=float, default=0.01,
+                    help="Allowed position error in source units, normally metres (default 0.01)")
+    ap.add_argument("--no-geometry", action="store_true",
+                    help="Skip the position check (it reads every point, so it needs RAM: "
+                         "roughly 100 bytes per point)")
     ap.add_argument("--json", help="Write the validation result to this JSON path")
     args = ap.parse_args()
 
@@ -398,6 +517,25 @@ def main():
         results[field] = {"status": "pass" if field_pass else "fail",
                           "mode": "distribution", "rows": rows}
         all_pass &= field_pass
+
+    geometry = {"status": "skipped", "reason": "--no-geometry"}
+    if not args.no_geometry:
+        print("\n  -- positions (X, Y, Z) --")
+        geometry = check_geometry(args.tiles_dir, args.source, args.srs_in, args.geometry_tolerance)
+        if geometry["status"] == "skipped":
+            print(f"  SKIP: {geometry['reason']}")
+        else:
+            print(f"  Tile points decoded : {geometry['tile_points']:,}   source points: {geometry['source_points']:,}")
+            print(f"  {'axis':>5} {'source min':>15} {'tile min':>15} {'source max':>15} {'tile max':>15} {'max error':>11}")
+            for name, a in geometry["axes"].items():
+                err = a.get("max_sorted_error_m", a["extent_error_m"])
+                print(f"  {name:>5} {a['source_min']:>15.3f} {a['tile_min']:>15.3f} "
+                      f"{a['source_max']:>15.3f} {a['tile_max']:>15.3f} {err:>9.4f} m"
+                      f"{'' if a['ok'] else '  MISMATCH'}")
+            print(f"  RESULT: {geometry['status'].upper()} (tolerance {args.geometry_tolerance} m; "
+                  "every sorted coordinate compared when counts match)")
+            all_pass &= geometry["status"] == "pass"
+        results["positions"] = geometry
 
     print("\n" + "=" * 78)
     print(f"OVERALL: {'PASS' if all_pass else 'FAIL'}")

@@ -152,7 +152,8 @@ Self-test results of the harness (py3dtiles 12.1.1, synthetic data):
 | LAS 1.2 pf3, `--skip-prepare --fields raw_classification` | FAIL | FAIL, all-zero output detected |
 | LAS 1.4 pf7, `--spec-version 1.1` (.glb) | PASS | PASS, exact match |
 | LAS 1.4 pf7, 3M points, 6 LOD levels | PASS | PASS, exact match, 14 s, 818 MB peak, output 0.5x source |
-| COPC `.copc.laz` (LAS 1.4 pf7), 670k points | PASS | PASS, exact match, no preprocessing, 3.7 s |
+| COPC `.copc.laz` tiled directly (real 18.8M-point survey file) | FAIL | FAIL, 100,000 correct values then zeros, 14-level degenerate tree |
+| COPC `.copc.laz` via step 2 rewrite (public autzen file, 10.6M points) | PASS | PASS, exact match, positions PASS, 1,321 tiles / 8 levels, rewrite 3.3 s + tiling 32 s on 2 cores |
 
 The 3M-point timing was on a 2-core machine, so treat it as a floor, not
 a forecast for the workstation.
@@ -295,6 +296,55 @@ more than the source, that is the overview tiles, not a defect.
 | `--jobs` | Defaults to all cores in this harness. py3dtiles' own default is 2, which understates throughput |
 
 ---
+
+## COPC input: py3dtiles silently produces garbage
+
+This is the most important finding after the classification one, and it
+was caught on the real dataset by step 4, not by reading documentation.
+
+py3dtiles reads every input in 100,000-point chunks, and starts each chunk
+with laspy's `LasReader.seek()`. A COPC file is a LAZ file whose compressed
+chunks vary in size (one per octree node). laspy's seek assumes equal-size
+chunks, so **every seek after the first lands in the wrong place and returns
+all-zero points**: XYZ collapse to the header offset, classification and
+intensity are 0. No error, no warning, exit code 0.
+
+Symptoms on an 18.8M-point COPC file:
+
+```
+Tile files      : 27          (a 3M-point .las gives ~500)
+Tileset depth   : 14 levels   (18.7M points stacked on one spot)
+classification  : 100,000 correct values, 18.7M zeros   -> step 4 FAIL
+```
+
+Reproduced on the public `autzen-classified.copc.laz` reference file
+(10.6M points):
+
+```
+seek(0)         classes [0, 2, 5, 9, 64, 65]   correct
+seek(100,000)   classes [0]   all-zero XYZ     wrong
+seek(1,000,000) classes [0]   all-zero XYZ     wrong
+```
+
+A plain `.las` or a fixed-chunk `.laz` seeks correctly. So the harness now:
+
+- detects variable-size chunks in step 1 (`lazrs.LazVlr.uses_variable_size_chunks`),
+- rewrites the file sequentially to a plain `.las` in step 2 (lossless, same
+  point format), and deletes it again after tiling,
+- refuses a COPC file in step 3 unless `--allow-variable-chunks` is given.
+
+**Consequences for the assessment**
+
+- The earlier advice to "convert from the COPC and skip step 2" was wrong.
+  Both files in the Terra folder need a rewrite before py3dtiles: the COPC
+  because of its chunking, the `.las` because of its legacy point format.
+  Either way it is one sequential pass with laspy, a few seconds per
+  million points, and no commercial tool.
+- A publishing service must validate by reading the tiles back. This bug
+  passes every cheaper check: the converter exits 0, the point count is
+  right, the file opens in a viewer.
+- If the pipeline standardises on COPC as the archive format (a good idea
+  for other reasons), the rewrite step is permanent, not a one-off.
 
 ## .laz and .copc.laz input: a hang the harness works around
 

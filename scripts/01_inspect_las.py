@@ -99,6 +99,30 @@ DIMENSION_MEANINGS = {
 MODERN_POINT_FORMATS = (6, 7, 8, 9, 10)
 
 
+def laz_variable_chunks(header):
+    """True if this is a LAZ file whose compressed chunks vary in size.
+
+    COPC files always do (one chunk per octree node). laspy cannot seek
+    correctly inside such files: it locates chunks as if they all had the
+    same size. py3dtiles reads every file by seeking to 100,000-point
+    offsets, so from the second chunk on it receives wrong data. Verified on
+    a real COPC file: every seek past the first chunk returned wrong X and
+    wrong classification, with both lazrs backends. Reading sequentially
+    (no seek) is correct, which is how 02_prepare_las.py reads it.
+    """
+    try:
+        from lazrs import LazVlr
+    except ImportError:
+        return False
+    for vlr in header.vlrs:
+        if getattr(vlr, "user_id", "").strip("\x00") == "laszip encoded":
+            try:
+                return bool(LazVlr(vlr.record_data).uses_variable_size_chunks())
+            except Exception:
+                return False
+    return False
+
+
 def human_bytes(n):
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
@@ -147,6 +171,7 @@ def inspect(path, sample_limit=5_000_000):
         report["dimension_names"] = list(pf.dimension_names)
         report["extra_dimension_names"] = list(pf.extra_dimension_names)
         report["has_rgb"] = "red" in pf.dimension_names
+        report["laz_variable_chunks"] = laz_variable_chunks(header)
 
         # A field is usable with --extra-fields only if its name appears in BOTH lists.
         usable = sorted(
@@ -234,7 +259,19 @@ def inspect(path, sample_limit=5_000_000):
 
     # The verdict that drives step 2.
     pf_id = report["point_format"]
-    if pf_id in MODERN_POINT_FORMATS:
+    if report["laz_variable_chunks"]:
+        report["preprocessing_required"] = True
+        report["verdict"] = (
+            f"LAS {report['las_version']} point format {pf_id}, compressed with VARIABLE-SIZE "
+            "chunks (every COPC file is). py3dtiles reads by seeking, and laspy cannot seek "
+            "correctly in such files: everything after the first chunk comes back wrong "
+            "(positions, classification, intensity) with no error. Run 02_prepare_las.py to "
+            "rewrite it as plain LAS 1.4 first. The rewrite reads sequentially, which is correct."
+        )
+        report["recommended_extra_fields"] = [
+            f for f in ("classification", "intensity") if f in usable
+        ]
+    elif pf_id in MODERN_POINT_FORMATS:
         report["preprocessing_required"] = False
         report["verdict"] = (
             f"LAS {report['las_version']} point format {pf_id}. "
@@ -270,6 +307,9 @@ def print_report(r):
     print(f"  Point format         : {r['point_format']}")
     print(f"  Point count          : {r['point_count']:,}")
     print(f"  Points sampled       : {r['sampled_points']:,}")
+    if r.get("laz_variable_chunks"):
+        print("  Compression          : LAZ, VARIABLE-SIZE chunks (COPC). py3dtiles cannot read")
+        print("                         this directly, see verdict.")
 
     print("\n  -- Georeferencing --")
     if r["crs"]:

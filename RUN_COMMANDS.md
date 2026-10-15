@@ -66,6 +66,11 @@ and the analysts actually use it in the viewer.
 Tiling + timing + memory + exact validation, in one go. Output:
 `results\merged_class\`.
 
+Because the input is COPC, `run_test.py` first rewrites it as a plain
+`.las` inside `results\` (about 600 MB for 18.8M points, deleted again after
+tiling unless you pass `--keep-prepared`). The conversion time it reports is
+for the tiling step only; the rewrite time is printed separately.
+
 ```powershell
 & $PY run_test.py $FILE --fields classification --name merged_class
 ```
@@ -131,16 +136,28 @@ start the viewer server with `--results "<folder>"`.
 
 ---
 
-## Running the tiling and validation steps by hand (optional)
+## Running the steps by hand (optional)
 
 `run_test.py` already does this. Use these only to repeat one part.
 
-```powershell
-# Tiling only
-& $PY scripts\03_convert_benchmark.py $FILE --out results\manual\tiles --extra-fields classification intensity --json results\manual\03_benchmark.json
+**Never feed the `.copc.laz` straight into the tiling step.** py3dtiles
+cannot seek in COPC files and silently produces a tileset where every point
+after the first 100,000 is zero. Step 3 refuses such a file; rewrite it
+first (step 2 below), then tile the plain `.las` it writes.
 
-# Validation only, against the same source file
+```powershell
+# Rewrite COPC -> plain .las (sequential read, lossless). ~600 MB for 18.8M points.
+& $PY scripts\02_prepare_las.py $FILE -o results\manual\merged_plain.las
+
+# Tiling only
+& $PY scripts\03_convert_benchmark.py results\manual\merged_plain.las --out results\manual\tiles --extra-fields classification intensity --json results\manual\03_benchmark.json
+
+# Validation only. The source for comparison can be the original COPC
+# (it is read sequentially here, which is correct) or the plain .las.
 & $PY scripts\04_validate_tileset.py results\manual\tiles --source $FILE --fields classification intensity --json results\manual\04_validation.json
+
+# Remove the 600 MB intermediate when done
+Remove-Item results\manual\merged_plain.las
 ```
 
 ## A numbered tile instead (small, quick check)
@@ -161,5 +178,7 @@ automatically. The rewritten copy goes into `results\`, not next to the data.
 | `& : The term '.venv\Scripts\python.exe' is not recognized` | Block B was not run in this terminal, or the `cd` path is wrong |
 | `mapbox_earcut` / `nmake` error during install | The venv was made with Python 3.14. Delete `.venv`, rerun block A |
 | Step 2 prints nothing for many minutes | Large file over a slow network link. Check the drive is reachable, then wait |
+| Step 4 FAILs with ~100,000 correct values and a 14-level tileset | The COPC was tiled directly (old harness version, or `--skip-prepare`). Update `scripts\` and rerun |
+| Step 3 says "Refusing to convert ... variable-size chunks" | Correct behaviour. Run step 2 first, or use `run_test.py` which does it for you |
 | Viewer says "Failed to load" | The server window from step 5 is not running, or the run name in the URL is wrong |
 | Viewer Intensity is all white or all black | Type a different number in **Intensity white point** |

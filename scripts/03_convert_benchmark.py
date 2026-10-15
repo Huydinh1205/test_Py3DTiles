@@ -65,6 +65,26 @@ PY3DTILES_ENTRY = (
 )
 
 
+def laz_variable_chunks(path):
+    """True for COPC and any other LAZ whose chunks vary in size.
+
+    py3dtiles reads by seeking to 100,000-point offsets and laspy cannot seek
+    correctly in such files: everything after the first chunk comes back as
+    zeros, silently. See 01_inspect_las.py. Plain .las and fixed-chunk .laz
+    are fine.
+    """
+    try:
+        import laspy
+        from lazrs import LazVlr
+        with laspy.open(str(path)) as f:
+            for vlr in f.header.vlrs:
+                if getattr(vlr, "user_id", "").strip("\x00") == "laszip encoded":
+                    return bool(LazVlr(vlr.record_data).uses_variable_size_chunks())
+    except Exception:
+        pass
+    return False
+
+
 def human_bytes(n):
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
@@ -152,6 +172,14 @@ def run_convert(args):
 
     if not src.exists():
         sys.exit(f"Input file not found: {src}")
+    if laz_variable_chunks(src) and not args.allow_variable_chunks:
+        sys.exit(
+            f"Refusing to convert {src.name}: it is a LAZ file with variable-size chunks "
+            "(COPC). py3dtiles seeks within the file and laspy's seek on such files "
+            "silently returns zeros, so the tileset would be garbage with no error. "
+            "Run 02_prepare_las.py first and convert the plain .las it writes. "
+            "(--allow-variable-chunks overrides, only to demonstrate the bug.)"
+        )
     if out.exists() and not args.keep:
         shutil.rmtree(out)
     # py3dtiles creates the output folder itself but not its parents.
@@ -276,6 +304,9 @@ def main():
                     help="Set to 256 if step 1 flagged 8-bit RGB")
     ap.add_argument("--spec-version", choices=["1.0", "1.1"],
                     help="3D Tiles spec version. 1.1 emits .glb instead of .pnts")
+    ap.add_argument("--allow-variable-chunks", action="store_true",
+                    help="Convert a COPC / variable-chunk LAZ anyway. Produces a broken "
+                         "tileset; only for demonstrating the bug.")
     ap.add_argument("--keep", action="store_true",
                     help="Do not delete an existing output directory first")
     ap.add_argument("--json", help="Write the benchmark result to this JSON path")

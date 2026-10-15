@@ -74,6 +74,54 @@ def human_bytes(n):
     return f"{n:.1f} PB"
 
 
+def _laz_variable_chunks(header):
+    """See 01_inspect_las.py: COPC / variable-size-chunk LAZ cannot be seeked."""
+    try:
+        from lazrs import LazVlr
+    except ImportError:
+        return False
+    for vlr in header.vlrs:
+        if getattr(vlr, "user_id", "").strip("\x00") == "laszip encoded":
+            try:
+                return bool(LazVlr(vlr.record_data).uses_variable_size_chunks())
+            except Exception:
+                return False
+    return False
+
+
+def _rewrite_same_format(reader, src_header, dst_path, started):
+    """Copy every point record unchanged into an uncompressed LAS 1.4 file.
+
+    Reads the source sequentially (chunk_iterator, no seek), which is correct
+    for COPC. The output is plain LAS, so any later seek is a simple offset.
+    """
+    pf = src_header.point_format
+    dst_header = laspy.LasHeader(version="1.4", point_format=pf.id)
+    dst_header.scales = src_header.scales
+    dst_header.offsets = src_header.offsets
+    for extra in pf.extra_dimensions:
+        dst_header.add_extra_dim(laspy.ExtraBytesParams(name=extra.name, type=extra.dtype))
+    try:
+        crs = src_header.parse_crs()
+        if crs is not None:
+            dst_header.add_crs(crs)
+            print(f"CRS    : {crs.name} (carried over)")
+    except Exception as exc:
+        print(f"CRS    : could not be carried over ({exc}), pass --srs_in manually")
+
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    with laspy.open(str(dst_path), mode="w", header=dst_header, do_compress=False) as writer:
+        for chunk in reader.chunk_iterator(CHUNK_SIZE):
+            writer.write_points(chunk)
+            written += len(chunk)
+            print(f"  {written:,} / {src_header.point_count:,} points", end="\r")
+    print(" " * 60, end="\r")
+    print(f"Done in {time.perf_counter() - started:.1f} s")
+    print(f"Output : {dst_path}  ({human_bytes(dst_path.stat().st_size)})")
+    return dst_path
+
+
 def prepare(src_path, dst_path):
     src_path, dst_path = Path(src_path), Path(dst_path)
     started = time.perf_counter()
@@ -83,12 +131,20 @@ def prepare(src_path, dst_path):
         src_pf = src_header.point_format
         has_rgb = "red" in src_pf.dimension_names
 
-        if int(src_pf.id) >= 6:
+        variable_chunks = _laz_variable_chunks(src_header)
+        if int(src_pf.id) >= 6 and not variable_chunks:
             print(
                 f"Source is already point format {src_pf.id}. "
                 "No rewrite needed, step 2 can be skipped."
             )
             return None
+
+        if int(src_pf.id) >= 6:
+            # Modern point format, but variable-size LAZ chunks (COPC).
+            # Keep the point format and copy records verbatim: lossless.
+            print("Source uses variable-size LAZ chunks (COPC), which py3dtiles cannot")
+            print("seek in. Rewriting as uncompressed LAS 1.4, same point format.")
+            return _rewrite_same_format(reader, src_header, dst_path, started)
 
         target_pf = 7 if has_rgb else 6
         print(f"Source : LAS {src_header.version} point format {src_pf.id}")

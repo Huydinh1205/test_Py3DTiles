@@ -70,6 +70,9 @@ def main():
     ap.add_argument("--name",
                     help="Results subfolder name (default: the input file name). "
                          "Use different names to keep several runs of the same file.")
+    ap.add_argument("--keep-prepared", action="store_true",
+                    help="Keep the intermediate LAS 1.4 file written by step 2 "
+                         "(deleted after tiling by default, it can be several hundred MB)")
     ap.add_argument("--skip-prepare", action="store_true",
                     help="Do not rewrite to LAS 1.4 even if step 1 recommends it. "
                          "Use this to demonstrate the failure mode.")
@@ -145,8 +148,17 @@ def main():
     if args.fields:
         cmd += ["--extra-fields"] + list(args.fields)
 
+    if args.skip_prepare and inspect.get("laz_variable_chunks"):
+        cmd.append("--allow-variable-chunks")
+
     run_step("STEP 3 of 4  Convert to 3D Tiles and benchmark", cmd)
     bench = json.loads(bench_json.read_text())
+
+    if prepared and not args.keep_prepared:
+        size = convert_input.stat().st_size
+        convert_input.unlink()
+        print(f"\nDeleted intermediate {convert_input.name} ({human_bytes(size)}). "
+              "Use --keep-prepared to keep it.")
 
     # ---------------- Step 4: validate ----------------
     validate_json = run_dir / "04_validation.json"
@@ -154,10 +166,10 @@ def main():
         "STEP 4 of 4  Read attributes back out of the tiles and verify",
         [
             str(SCRIPTS / "04_validate_tileset.py"), str(tiles_dir),
-            "--source", str(convert_input),
+            "--source", str(src),
             "--fields", *args.fields,
             "--json", str(validate_json),
-        ],
+        ] + (["--srs-in", str(srs_in)] if srs_in else []),
         allow_failure=True,
     )
     validation = json.loads(validate_json.read_text())
@@ -180,7 +192,8 @@ def main():
         ("EPSG used for conversion", srs_in or "none"),
         ("Classified", "yes" if inspect["is_classified"] else "NO (codes 0/1 only)"),
         ("Preprocessing required",
-         "yes, LAS 1.4 rewrite" if inspect["preprocessing_required"] else "no"),
+         ("yes, COPC -> plain .las rewrite" if inspect.get("laz_variable_chunks")
+          else "yes, LAS 1.4 rewrite") if inspect["preprocessing_required"] else "no"),
         ("Preprocessing applied", "yes" if prepared else "no"),
         ("3D Tiles spec version", bench.get("spec_version")),
         ("Conversion time", f"{bench.get('elapsed_seconds')} s"),
@@ -192,7 +205,8 @@ def main():
         ("Workers used", str(bench.get("jobs"))),
     ]
     for field, result in validation.get("fields", {}).items():
-        rows.append((f"Attribute '{field}'", result.get("status", "?").upper()))
+        label = "Positions X/Y/Z" if field == "positions" else f"Attribute '{field}'"
+        rows.append((label, result.get("status", "?").upper()))
     rows.append(("OVERALL VALIDATION",
                  "PASS" if validation.get("overall_pass") else "FAIL"))
     rows.append(("Total harness runtime", f"{total:.1f} s"))

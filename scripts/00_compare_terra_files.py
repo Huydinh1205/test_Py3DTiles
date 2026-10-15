@@ -20,9 +20,9 @@ Rather than guess, this script reads every file and tests the relationships:
 
   Is the .copc.laz a faithful copy of the merged .las?
       Compares point count, class histogram, bounds and point format.
-      A COPC file must be LAS 1.4 point format 6, 7 or 8 (COPC spec), so if
-      it matches the merged .las it can be converted by py3dtiles with NO
-      preprocessing, even when the .las itself is an older point format.
+      A COPC file must be LAS 1.4 point format 6, 7 or 8 (COPC spec). It is
+      the cheapest file to read over the network, but py3dtiles cannot seek
+      in it, so run_test.py rewrites it as a plain .las before tiling.
 
 Usage
 -----
@@ -306,12 +306,12 @@ def main():
         if count_ok and hist_ok in (True, None):
             verdict = (f"YES. Same points, re-packed as COPC (LAS {c['version']} pf{c['pf']}, compressed, "
                        "spatially ordered). ")
-            if m["pf"] < 6:
-                verdict += ("Because the .las is pf" + str(m["pf"]) + " and the COPC is pf" + str(c["pf"]) +
-                            ", converting the COPC with py3dtiles keeps classification with NO "
-                            "preprocessing step, while the .las would need 02_prepare_las.py.")
-            else:
-                verdict += "Either file converts without preprocessing."
+            verdict += ("NOTE: py3dtiles cannot read COPC correctly (laspy seek on variable-size "
+                        "LAZ chunks returns zeros silently), so BOTH files need the step 2 rewrite "
+                        "before tiling: the COPC because of its chunking, the .las because of its "
+                        "point format." if m["pf"] < 6 else
+                        "NOTE: py3dtiles cannot read COPC correctly, so convert from the .las, or "
+                        "let step 2 rewrite the COPC first.")
             if newer:
                 verdict += (" It was written after the .las, which fits QGIS creating it as an index "
                             "the first time someone opened the .las (QGIS 3.26+ indexes to COPC).")
@@ -352,15 +352,16 @@ def main():
         m = merged_las[0]
         c = merged_copc[0] if merged_copc else None
         print(f"  Publish               : the merged point cloud, one dataset for the whole site.")
-        if c and m["pf"] < 6 and c["pf"] >= 6:
-            print(f"  Convert from          : {c['name']}  (already pf{c['pf']}, skips step 2)")
+        if c:
+            print(f"  Convert from          : {c['name']}  (smallest to read; run_test.py rewrites")
+            print(f"                          it to a plain .las first, py3dtiles cannot seek in COPC)")
             print(f"  Cross-check against   : {m['name']}  (source of truth)")
         else:
             print(f"  Convert from          : {m['name']}")
         if parts:
             smallest = min(parts, key=lambda f: f["points"])
             print(f"  Quick test first on   : {smallest['name']}  ({smallest['points']:,} points, fastest)")
-        big = c if (c and m["pf"] < 6 and c["pf"] >= 6) else m
+        big = c if c else m
         print(f"  Large-dataset test    : {big['name']}  ({big['points']:,} points)")
         print(f"  Do not publish        : the numbered files individually")
     else:
