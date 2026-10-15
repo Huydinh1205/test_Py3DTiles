@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>py3dtiles Tileset Inspector</title>
+<link rel="icon" href="data:,">
+
+<!--
+  Minimal CesiumJS harness for the py3dtiles feasibility test.
+
+  It answers the two questions in Phil's brief that a script cannot:
+    - "visual quality" and "browser performance" in our actual viewer
+    - whether the classification attribute is usable for styling and
+      filtering once the tileset is loaded
+
+  No Cesium ion account or token is needed. The globe and base imagery are
+  disabled on purpose, so nothing is requested from ion and the frame rate
+  measures the tileset alone.
+
+  IMPORTANT: a browser will not load a tileset over file://. Serve the
+  folder over HTTP first. See README_VIEWER.txt next to this file.
+-->
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/cesium@1.145.0/Build/Cesium/Widgets/widgets.css">
+<script src="https://cdn.jsdelivr.net/npm/cesium@1.145.0/Build/Cesium/Cesium.js"></script>
+
+<style>
+  :root {
+    --bg: #11161c;
+    --panel: #1b222b;
+    --border: #2d3844;
+    --text: #e6edf3;
+    --muted: #94a3b2;
+    --accent: #4da3ff;
+    --ok: #4ade80;
+    --warn: #fbbf24;
+    --bad: #f87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
+  #cesium { position: absolute; inset: 0; }
+  .cesium-widget-credits { display: none !important; }
+
+  #panel {
+    position: absolute; top: 12px; left: 12px; width: 310px; max-height: calc(100% - 24px);
+    overflow-y: auto; background: rgba(27, 34, 43, 0.95); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px; backdrop-filter: blur(6px); z-index: 10;
+  }
+  h1 { font-size: 14px; margin: 0 0 2px; letter-spacing: .2px; }
+  .sub { color: var(--muted); font-size: 11px; margin: 0 0 12px; }
+  fieldset { border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+    margin: 0 0 10px; }
+  legend { color: var(--muted); font-size: 11px; text-transform: uppercase;
+    letter-spacing: .6px; padding: 0 4px; }
+  label { display: block; font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  input[type=text], select {
+    width: 100%; background: #0d1217; color: var(--text); border: 1px solid var(--border);
+    border-radius: 6px; padding: 6px 8px; font: inherit; font-size: 12px;
+  }
+  input[type=range] { width: 100%; }
+  button {
+    width: 100%; margin-top: 8px; padding: 7px 10px; border: 0; border-radius: 6px;
+    background: var(--accent); color: #06121f; font: inherit; font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary { background: #2d3844; color: var(--text); font-weight: 500; }
+  button:hover { filter: brightness(1.1); }
+  .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+  .row label { margin: 0; flex: 1; color: var(--text); font-size: 12px; }
+  table { width: 100%; border-collapse: collapse; font-size: 11px; }
+  td { padding: 2px 0; color: var(--muted); }
+  td.v { color: var(--text); text-align: right; font-variant-numeric: tabular-nums; }
+  .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    margin-right: 6px; vertical-align: middle; }
+  .legend-item { display: flex; align-items: center; font-size: 11px; padding: 1px 0;
+    cursor: pointer; user-select: none; }
+  .legend-item.off { opacity: .35; }
+  .legend-item span:last-child { flex: 1; }
+  #status { font-size: 11px; padding: 7px 9px; border-radius: 6px; margin-bottom: 10px;
+    background: #0d1217; border: 1px solid var(--border); color: var(--muted); }
+  #status.ok { border-color: var(--ok); color: var(--ok); }
+  #status.bad { border-color: var(--bad); color: var(--bad); }
+  code { background: #0d1217; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+</style>
+</head>
+<body>
+<div id="cesium"></div>
+
+<div id="panel">
+  <h1>py3dtiles Tileset Inspector</h1>
+  <p class="sub">BunjilView feasibility test, Oct 2026</p>
+
+  <div id="status">Enter a tileset.json URL and press Load.</div>
+
+  <fieldset>
+    <legend>Tileset</legend>
+    <label for="url">tileset.json URL (served over HTTP)</label>
+    <input type="text" id="url" value="../results/sample_las14_pf7/tiles/tileset.json">
+    <button id="load">Load tileset</button>
+    <button id="reset" class="secondary">Re-centre camera</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>Colour by</legend>
+    <select id="mode">
+      <option value="rgb">Source RGB</option>
+      <option value="classification">Classification (ASPRS)</option>
+      <option value="intensity">Intensity (greyscale)</option>
+    </select>
+    <div class="row" style="margin-top:8px">
+      <label for="size">Point size</label>
+      <input type="range" id="size" min="1" max="8" step="1" value="2" style="flex:1">
+    </div>
+    <div class="row">
+      <label for="budget">Detail level</label>
+      <input type="range" id="budget" min="1" max="30" step="1" value="16" style="flex:1">
+    </div>
+  </fieldset>
+
+  <fieldset id="legendBox" style="display:none">
+    <legend>Classes (click to toggle)</legend>
+    <div id="legend"></div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Performance</legend>
+    <table>
+      <tr><td>Frames per second</td><td class="v" id="mFps">-</td></tr>
+      <tr><td>Points rendered</td><td class="v" id="mPoints">-</td></tr>
+      <tr><td>Tiles visible</td><td class="v" id="mVisible">-</td></tr>
+      <tr><td>Tiles loaded</td><td class="v" id="mLoaded">-</td></tr>
+      <tr><td>GPU memory</td><td class="v" id="mGpu">-</td></tr>
+      <tr><td>Load time to idle</td><td class="v" id="mLoadTime">-</td></tr>
+    </table>
+  </fieldset>
+
+  <fieldset>
+    <legend>Tileset metadata</legend>
+    <table>
+      <tr><td>Spec version</td><td class="v" id="mSpec">-</td></tr>
+      <tr><td>Geometric error</td><td class="v" id="mGeoErr">-</td></tr>
+      <tr><td>Attributes found</td><td class="v" id="mAttrs">-</td></tr>
+    </table>
+  </fieldset>
+</div>
+
+<script>
+// ---------------------------------------------------------------------------
+// ASPRS standard classification codes and display colours.
+// ---------------------------------------------------------------------------
+const CLASSES = [
+  { code: 0,  name: "Never classified", color: "#64748b" },
+  { code: 1,  name: "Unclassified",     color: "#94a3b8" },
+  { code: 2,  name: "Ground",           color: "#a1663a" },
+  { code: 3,  name: "Low vegetation",   color: "#b9d94a" },
+  { code: 4,  name: "Medium vegetation",color: "#5fb84a" },
+  { code: 5,  name: "High vegetation",  color: "#1f7a33" },
+  { code: 6,  name: "Building",         color: "#d94f4f" },
+  { code: 7,  name: "Low point (noise)",color: "#7c3aed" },
+  { code: 9,  name: "Water",            color: "#3b82f6" },
+  { code: 11, name: "Road surface",     color: "#475569" },
+  { code: 17, name: "Bridge deck",      color: "#f59e0b" },
+  { code: 18, name: "High noise",       color: "#ec4899" },
+];
+
+// Globe and base imagery off: nothing is fetched from Cesium ion, and the
+// frame rate reflects the tileset alone.
+const viewer = new Cesium.Viewer("cesium", {
+  globe: false,
+  baseLayer: false,
+  baseLayerPicker: false,
+  geocoder: false,
+  homeButton: false,
+  sceneModePicker: false,
+  navigationHelpButton: false,
+  animation: false,
+  timeline: false,
+  infoBox: false,
+  selectionIndicator: false,
+  requestRenderMode: false,
+});
+viewer.scene.backgroundColor = Cesium.Color.fromCssColorString("#11161c");
+
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status");
+let tileset = null;
+let hiddenClasses = new Set();
+let loadStart = 0;
+
+function setStatus(msg, kind) {
+  statusEl.textContent = msg;
+  statusEl.className = kind || "";
+}
+
+// ---------------------------------------------------------------------------
+// Styling.
+//
+// Verified behaviour with CesiumJS 1.145 and py3dtiles 12.1.1:
+//
+//   3D Tiles 1.0 (.pnts)  per-point attributes live in the batch table and
+//                         the declarative style language reads them as
+//                         ${classification}. Cesium3DTileStyle works.
+//
+//   3D Tiles 1.1 (.glb)   py3dtiles writes them as plain glTF vertex
+//                         attributes (_CLASSIFICATION) with no structural
+//                         metadata extension. The declarative style language
+//                         cannot see them under any name. They ARE readable
+//                         in a CustomShader as fsInput.attributes.classification.
+//
+//                         py3dtiles also writes COLOR_0 as UNSIGNED_BYTE with
+//                         normalized:false, which glTF 2.0 does not allow for
+//                         colours, and a lit PBR material. Out of the box the
+//                         source RGB renders as plain white points. Dividing
+//                         by 255 in an UNLIT CustomShader restores it.
+//
+// So this viewer picks the mechanism from the tileset's asset.version. The
+// production BunjilView viewer would need the same CustomShader approach if
+// we published 3D Tiles 1.1. Recommendation: stay on 3D Tiles 1.0 (.pnts),
+// which renders correctly with no custom code.
+// ---------------------------------------------------------------------------
+function isSpec11() {
+  return tileset && tileset.asset && String(tileset.asset.version).startsWith("1.1");
+}
+
+function hexToVec3(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  const f = (v) => (v / 255).toFixed(3);
+  return `vec3(${f((n >> 16) & 255)}, ${f((n >> 8) & 255)}, ${f(n & 255)})`;
+}
+
+function buildShader(mode) {
+  const unlit = Cesium.LightingModel.UNLIT;
+  if (mode === "classification") {
+    const branches = CLASSES
+      .filter((c) => !hiddenClasses.has(c.code))
+      .map((c) => `  if (abs(c - ${c.code}.0) < 0.5) { material.diffuse = ${hexToVec3(c.color)}; return; }`)
+      .join("\n");
+    return new Cesium.CustomShader({
+      lightingModel: unlit,
+      fragmentShaderText: `
+void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
+  float c = fsInput.attributes.classification;
+${branches}
+  discard;
+}`,
+    });
+  }
+  if (mode === "intensity") {
+    return new Cesium.CustomShader({
+      lightingModel: unlit,
+      fragmentShaderText: `
+void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
+  material.diffuse = vec3(clamp(fsInput.attributes.intensity / ${INTENSITY_SCALE.toFixed(1)}, 0.0, 1.0));
+}`,
+    });
+  }
+  // Source RGB. COLOR_0 arrives un-normalised (0..255), so scale it here.
+  return new Cesium.CustomShader({
+    lightingModel: unlit,
+    fragmentShaderText: `
+void fragmentMain(FragmentInput fsInput, inout czm_modelMaterial material) {
+  material.diffuse = fsInput.attributes.color_0.rgb / 255.0;
+}`,
+  });
+}
+
+// Display scale for intensity. LAS intensity is 16-bit but most sensors use
+// a fraction of that range. Adjust if the greyscale looks washed out or dark.
+const INTENSITY_SCALE = 2600;
+
+function buildStyle(mode) {
+  if (mode === "classification") {
+    const conditions = CLASSES
+      .filter((c) => !hiddenClasses.has(c.code))
+      .map((c) => [`\${classification} === ${c.code}`, `color('${c.color}')`]);
+    conditions.push(["true", "color('black', 0)"]);  // hidden or unknown
+    return { color: { conditions } };
+  }
+  if (mode === "intensity") {
+    return { color: `color('white') * (\${intensity} / ${INTENSITY_SCALE}.0)` };
+  }
+  return {};  // source RGB
+}
+
+function applyStyle() {
+  if (!tileset) return;
+  const mode = $("mode").value;
+  const pointSize = Number($("size").value);
+  try {
+    if (isSpec11()) {
+      tileset.style = new Cesium.Cesium3DTileStyle({ pointSize });
+      tileset.customShader = buildShader(mode);
+    } else {
+      tileset.customShader = undefined;
+      tileset.style = new Cesium.Cesium3DTileStyle({ pointSize, ...buildStyle(mode) });
+    }
+  } catch (err) {
+    setStatus("Style error: " + err.message, "bad");
+  }
+}
+
+function buildLegend() {
+  const box = $("legend");
+  box.innerHTML = "";
+  CLASSES.forEach((c) => {
+    const row = document.createElement("div");
+    row.className = "legend-item" + (hiddenClasses.has(c.code) ? " off" : "");
+    row.innerHTML =
+      `<span class="swatch" style="background:${c.color}"></span>` +
+      `<span>${c.code} ${c.name}</span>`;
+    row.onclick = () => {
+      hiddenClasses.has(c.code) ? hiddenClasses.delete(c.code)
+                                : hiddenClasses.add(c.code);
+      buildLegend();
+      applyStyle();
+    };
+    box.appendChild(row);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Attribute detection. Picks a tile below the two overview tiles (root content
+// and its only child) and reads the attribute names from its header:
+//   .pnts  ->  batch table JSON keys          (3D Tiles 1.0)
+//   .glb   ->  glTF attributes starting "_"   (3D Tiles 1.1)
+// ---------------------------------------------------------------------------
+async function detectAttributes(tilesetUrl) {
+  try {
+    const base = new URL(tilesetUrl, location.href);
+    const ts = await (await fetch(base)).json();
+    const uriOf = (n) => n && n.content && (n.content.uri || n.content.url);
+
+    // Breadth-first: first content tile deeper than the overview levels.
+    let queue = [{ node: ts.root, depth: 0 }], target = null;
+    while (queue.length && !target) {
+      const { node, depth } = queue.shift();
+      if (depth >= 2 && uriOf(node)) target = uriOf(node);
+      (node.children || []).forEach((c) => queue.push({ node: c, depth: depth + 1 }));
+    }
+    target = target || uriOf(ts.root);
+    if (!target) return [];
+
+    const buf = await (await fetch(new URL(target, base))).arrayBuffer();
+    const dv = new DataView(buf);
+    const magic = new TextDecoder().decode(new Uint8Array(buf, 0, 4));
+    const text = (off, len) => new TextDecoder().decode(new Uint8Array(buf, off, len));
+
+    if (magic === "pnts") {
+      const ftJson = dv.getUint32(12, true), ftBin = dv.getUint32(16, true);
+      const btJson = dv.getUint32(20, true);
+      if (!btJson) return [];
+      return Object.keys(JSON.parse(text(28 + ftJson + ftBin, btJson)));
+    }
+    if (magic === "glTF") {
+      const chunkLen = dv.getUint32(12, true);
+      const gltf = JSON.parse(text(20, chunkLen));
+      const names = new Set();
+      (gltf.meshes || []).forEach((m) => (m.primitives || []).forEach((p) =>
+        Object.keys(p.attributes || {}).forEach((a) => {
+          if (a.startsWith("_")) names.add(a.slice(1).toLowerCase());
+        })));
+      return [...names];
+    }
+  } catch (err) {
+    console.warn("Attribute detection failed:", err);
+  }
+  return [];
+}
+
+// ---------------------------------------------------------------------------
+// Load
+// ---------------------------------------------------------------------------
+async function loadTileset() {
+  const url = $("url").value.trim();
+  if (!url) return;
+
+  if (tileset) {
+    viewer.scene.primitives.remove(tileset);
+    tileset = null;
+  }
+  setStatus("Loading " + url + " ...");
+  loadStart = performance.now();
+  $("mLoadTime").textContent = "-";
+
+  try {
+    tileset = await Cesium.Cesium3DTileset.fromUrl(url, {
+      maximumScreenSpaceError: 16,
+      cacheBytes: 536870912, // 512 MB
+    });
+  } catch (err) {
+    setStatus("Failed to load: " + err.message +
+      "  (serving over http:// rather than file://?)", "bad");
+    return;
+  }
+
+  tileset.maximumMemoryUsage = 1024;
+  viewer.scene.primitives.add(tileset);
+  await viewer.zoomTo(tileset);
+
+  tileset.allTilesLoaded.addEventListener(() => {
+    $("mLoadTime").textContent =
+      ((performance.now() - loadStart) / 1000).toFixed(1) + " s";
+  });
+
+  // Read what the tileset declares about itself.
+  const asset = tileset.asset || {};
+  $("mSpec").textContent = asset.version || "unknown";
+  $("mGeoErr").textContent = tileset.geometricError
+    ? tileset.geometricError.toFixed(1) : "-";
+
+  // Cesium hands per-point attributes to the styling engine only, there is
+  // no public API to list them. So read one tile's header directly instead,
+  // the same way scripts/04_validate_tileset.py does.
+  const attrs = await detectAttributes(url);
+  $("mAttrs").textContent = attrs.length ? attrs.join(", ") : "none";
+  if (!attrs.includes("classification")) {
+    setStatus("Loaded, but the tileset has NO classification attribute. " +
+      "Colour by Classification will show nothing. Check step 1 and 4 output.", "bad");
+    buildLegend();
+    $("legendBox").style.display = "block";
+    applyStyle();
+    return;
+  }
+
+  setStatus(isSpec11()
+    ? "Loaded 3D Tiles 1.1. Attributes are rendered through a CustomShader, " +
+      "the declarative style language cannot read them in this format."
+    : "Loaded. Switch 'Colour by' to Classification to check the attribute.", "ok");
+  buildLegend();
+  $("legendBox").style.display = "block";
+  applyStyle();
+
+}
+
+// ---------------------------------------------------------------------------
+// Performance metrics, sampled once a second.
+// ---------------------------------------------------------------------------
+let frames = 0, lastSample = performance.now();
+viewer.scene.postRender.addEventListener(() => {
+  frames++;
+  const now = performance.now();
+  if (now - lastSample < 1000) return;
+
+  $("mFps").textContent = (frames * 1000 / (now - lastSample)).toFixed(0);
+  frames = 0;
+  lastSample = now;
+
+  if (tileset) {
+    const s = tileset.statistics;
+    $("mPoints").textContent = s.numberOfFeaturesSelected
+      ? s.numberOfFeaturesSelected.toLocaleString()
+      : (s.numberOfPointsSelected || 0).toLocaleString();
+    $("mVisible").textContent = s.visited.toLocaleString();
+    $("mLoaded").textContent = s.numberOfTilesTotal.toLocaleString();
+    $("mGpu").textContent =
+      ((s.geometryByteLength + s.texturesByteLength) / 1048576).toFixed(1) + " MB";
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Controls
+// ---------------------------------------------------------------------------
+$("load").onclick = loadTileset;
+$("reset").onclick = () => tileset && viewer.zoomTo(tileset);
+$("mode").onchange = applyStyle;
+$("size").oninput = applyStyle;
+// Lower screen-space error = more detail = more points on screen.
+$("budget").oninput = (e) => {
+  if (tileset) tileset.maximumScreenSpaceError = 32 - Number(e.target.value);
+};
+$("url").addEventListener("keydown", (e) => { if (e.key === "Enter") loadTileset(); });
+</script>
+</body>
+</html>

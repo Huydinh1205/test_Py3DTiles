@@ -1,0 +1,11 @@
+# Core conversion tool (CLI + Python library)
+py3dtiles[las]==12.1.1
+
+# LAS/LAZ reader. The lazrs backend is required to read compressed .laz files.
+laspy[lazrs]>=2.5
+
+numpy>=1.24
+
+# Optional: more accurate peak-memory measurement in 03_convert_benchmark.py.
+# The script falls back to resource.getrusage() if psutil is missing.
+psutil>=5.9
