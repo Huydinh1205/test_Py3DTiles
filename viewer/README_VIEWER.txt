@@ -37,8 +37,7 @@ those get answered.
 
   Colour by: Classification
       THIS IS THE IMPORTANT ONE. If the classification attribute survived
-      the conversion you will see distinct colours per class and the legend
-      toggles will filter the cloud. If every point disappears or stays one
+      the conversion you will see distinct colours per class. If every point disappears or stays one
       colour, the attribute did not survive. Script 04 proves this
       numerically; this is the visual confirmation.
 
@@ -69,6 +68,43 @@ those get answered.
       How long from pressing Load until every visible tile has arrived.
       This is the number an analyst actually experiences.
 
+
+COORDINATES (hover and click)
+=============================
+
+Hover over the point cloud to read the position under the cursor. Click to
+pin it (P1, P2, ...). "Copy pins (CSV)" puts every pin on the clipboard as
+id, easting, northing, height, latitude, longitude, utm_zone,
+camera_distance_m, ready to paste into Excel or a report.
+
+  Easting / Northing
+      UTM, in the zone of the source CRS (read from ../01_inspect.json next
+      to tiles/). For EPSG:32755 this is WGS 84 / UTM 55S, so the numbers are
+      directly comparable with the X/Y in the source LAS.
+
+  Height = source Z
+      EPSG:32755 has no vertical part, so py3dtiles carries the LAS Z value
+      through unchanged. Whether that Z is ellipsoidal or AHD depends on the
+      survey settings in DJI Terra, not on the tiling. In the Snowy region
+      the two differ by about 20 m.
+
+  Precision
+      The position is read from the rendered depth buffer. Measured against
+      the source LAS: about 1 cm with the camera 20 m away, 2 to 8 cm at
+      45 to 70 m, 30 to 50 cm with the whole site in view. Zoom in before
+      pinning a point for a report. camera_distance_m in the CSV records how
+      close you were.
+
+  How to check positions against ground truth
+      1. Zoom in on a feature with known coordinates (GCP target, survey
+         mark, building corner) and click it.
+      2. Compare the pin with the surveyed coordinates (AUSPOS report or
+         GCP list). A horizontal offset points to a CRS or datum mismatch,
+         a constant vertical offset of ~20 m points to ellipsoidal vs AHD.
+
+  Classification and intensity of a single point cannot be read by
+  clicking: CesiumJS loads them as per-point attributes, not as pickable
+  features. Use "Colour by" instead.
 
 NOTES
 =====

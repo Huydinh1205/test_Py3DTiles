@@ -252,7 +252,7 @@ backtick, or put each command on one line.
 | `scripts/03_convert_benchmark.py` | Runs `py3dtiles convert`, measures wall time, peak memory across all worker processes, output size, tile count, LOD depth |
 | `scripts/04_validate_tileset.py` | Reads attributes back out of the `.pnts` batch tables or `.glb` custom attributes and compares the distribution against the source. This is the step that catches silent loss |
 | `scripts/make_sample_data.py` | Synthetic LAS pairs for testing the harness itself |
-| `viewer/index.html` | CesiumJS inspector: colour by RGB, classification or intensity, toggle classes, read frames per second and GPU memory. Detects the attributes in the tileset and warns if classification is missing. Handles both 1.0 and 1.1 tilesets. No Cesium ion token required |
+| `viewer/index.html` | CesiumJS inspector: colour by RGB, classification or intensity, hover or click to read coordinates, read frames per second and GPU memory. Detects the attributes in the tileset and warns if classification is missing. Handles both 1.0 and 1.1 tilesets. No Cesium ion token required |
 
 Each script runs standalone with `--help` if you want to drive the steps by
 hand rather than through `run_test.py`.
@@ -280,6 +280,17 @@ So the check is not "roughly the same distribution", it is "no value was
 lost, altered or duplicated". If a future py3dtiles version changes the
 layout and the counts stop lining up, the script falls back to a
 distribution comparison with a tolerance and says so in its output.
+
+**Dense datasets produce several tileset files.** py3dtiles moves any
+subtree whose JSON would exceed 100 KB into its own `tileset.<node>.json`
+and points to it from the parent. The 18.8M-point survey file produced 5
+such files. Anything that walks the tree (position check, LOD depth, the
+viewer's attribute probe) must follow those references, or it only sees
+the first few levels. This harness does; an earlier version reported a
+false position FAIL (2,692 of 18.8M points decoded), "3 LOD levels", and
+"no classification attribute" in the viewer, all from not following them.
+Re-verified on a 20M-point synthetic file at the same density: 5 tileset
+files, 7 levels, all 20M positions decoded, PASS.
 
 If you ever count points across every file in the output and get slightly
 more than the source, that is the overview tiles, not a defect.

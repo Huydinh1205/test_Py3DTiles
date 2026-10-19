@@ -275,16 +275,22 @@ def tile_positions_ecef(tiles_dir):
     overviews = overview_tile_paths(tiles_dir)
     chunks, saw_glb = [], False
 
-    def walk(node, parent):
+    def walk(node, parent, base_dir):
         m = parent
         if node.get("transform"):
             m = parent @ np.array(node["transform"], dtype=np.float64).reshape(4, 4).T
         content = node.get("content") or {}
         uri = content.get("uri") or content.get("url")
         if uri:
-            path = (tiles_dir / uri).resolve()
+            path = (base_dir / uri).resolve()
             nonlocal saw_glb
-            if path.suffix == ".glb":
+            if path.suffix == ".json":
+                # External tileset. py3dtiles splits any subtree whose JSON
+                # exceeds 100 KB into tileset.<node>.json, so dense datasets
+                # always have these. Its root continues this branch.
+                sub = json.loads(path.read_text())
+                walk(sub["root"], m, path.parent)
+            elif path.suffix == ".glb":
                 saw_glb = True
             elif path not in overviews:
                 local = read_pnts_positions(path)
@@ -292,9 +298,9 @@ def tile_positions_ecef(tiles_dir):
                     homo = np.hstack([local, np.ones((len(local), 1))])
                     chunks.append((homo @ m.T)[:, :3])
         for child in node.get("children") or []:
-            walk(child, m)
+            walk(child, m, base_dir)
 
-    walk(data["root"], np.eye(4))
+    walk(data["root"], np.eye(4), tiles_dir)
     if saw_glb or not chunks:
         return None
     return np.vstack(chunks)
@@ -481,6 +487,10 @@ def main():
                     print(f"  {k:>8} {ss[k]:>12} {ts[k]:>12}")
             print(f"  RESULT: {'PASS' if identical else 'FAIL'}")
             results[field] = {"status": "pass" if identical else "fail", "mode": "exact"}
+            if len(np.unique(src_vals)) <= 64:
+                # Kept for the viewer legend: which classes exist and how many points.
+                s_u, s_c = np.unique(src_vals, return_counts=True)
+                results[field]["value_counts"] = {int(u): int(c) for u, c in zip(s_u, s_c)}
             all_pass &= identical
             continue
 

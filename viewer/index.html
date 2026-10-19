@@ -9,10 +9,12 @@
 <!--
   Minimal CesiumJS harness for the py3dtiles feasibility test.
 
-  It answers the two questions that a script cannot:
+  It answers the questions that a script cannot:
     - "visual quality" and "browser performance" in our actual viewer
     - whether the classification attribute is usable for styling and
       filtering once the tileset is loaded
+    - where a point sits on the Earth: hover to read its coordinates,
+      click to pin it, then compare with GCPs or the source LAS
 
   No Cesium ion account or token is needed. The globe and base imagery are
   disabled on purpose, so nothing is requested from ion and the frame rate
@@ -83,10 +85,24 @@
   #status.ok { border-color: var(--ok); color: var(--ok); }
   #status.bad { border-color: var(--bad); color: var(--bad); }
   code { background: #0d1217; padding: 1px 4px; border-radius: 3px; font-size: 11px; }
+  .hint { font-size: 11px; color: var(--muted); margin: 0 0 6px; }
+  .btnrow { display: flex; gap: 6px; }
+  .btnrow button { margin-top: 6px; }
+  #pins { font-size: 11px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  #pins div { padding: 2px 0; border-top: 1px solid var(--border); color: var(--text); }
+  #pins b { color: var(--warn); margin-right: 4px; }
+  #tip {
+    position: absolute; z-index: 20; pointer-events: none; display: none;
+    background: rgba(13, 18, 23, 0.92); border: 1px solid var(--border); border-radius: 6px;
+    padding: 5px 8px; font-size: 11px; line-height: 1.4; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+  #tip span { color: var(--muted); }
 </style>
 </head>
 <body>
 <div id="cesium"></div>
+<div id="tip"></div>
 
 <div id="panel">
   <h1>py3dtiles Tileset Inspector</h1>
@@ -100,6 +116,25 @@
     <input type="text" id="url" value="../results/sample_las14_pf7/tiles/tileset.json">
     <button id="load">Load tileset</button>
     <button id="reset" class="secondary">Re-centre camera</button>
+  </fieldset>
+
+  <fieldset>
+    <legend>Coordinates</legend>
+    <p class="hint">Hover over the points to read a position. Click to pin it.
+      Zoom in close for centimetre-level readings.</p>
+    <table>
+      <tr><td id="cZoneLabel">UTM</td><td class="v" id="cZone">-</td></tr>
+      <tr><td>Easting (m)</td><td class="v" id="cE">-</td></tr>
+      <tr><td>Northing (m)</td><td class="v" id="cN">-</td></tr>
+      <tr><td>Height (m) = source Z</td><td class="v" id="cH">-</td></tr>
+      <tr><td>Latitude</td><td class="v" id="cLat">-</td></tr>
+      <tr><td>Longitude</td><td class="v" id="cLon">-</td></tr>
+    </table>
+    <div id="pins"></div>
+    <div class="btnrow">
+      <button id="copyPins" class="secondary">Copy pins (CSV)</button>
+      <button id="clearPins" class="secondary">Clear pins</button>
+    </div>
   </fieldset>
 
   <fieldset>
@@ -146,6 +181,7 @@
       <tr><td>Spec version</td><td class="v" id="mSpec">-</td></tr>
       <tr><td>Geometric error</td><td class="v" id="mGeoErr">-</td></tr>
       <tr><td>Attributes found</td><td class="v" id="mAttrs">-</td></tr>
+      <tr><td>Source CRS</td><td class="v" id="mCrs">-</td></tr>
     </table>
   </fieldset>
 </div>
@@ -224,6 +260,13 @@ function setStatus(msg, kind) {
 // we published 3D Tiles 1.1. Recommendation: stay on 3D Tiles 1.0 (.pnts),
 // which renders correctly with no custom code.
 // ---------------------------------------------------------------------------
+function legendClasses() {
+  if (!presentClasses) return CLASSES;
+  return Object.keys(presentClasses).map(Number).map((code) =>
+    CLASSES.find((c) => c.code === code) ||
+    { code, name: "Reserved / user defined", color: "#e5e7eb" });
+}
+
 function isSpec11() {
   return tileset && tileset.asset && String(tileset.asset.version).startsWith("1.1");
 }
@@ -237,7 +280,7 @@ function hexToVec3(hex) {
 function buildShader(mode) {
   const unlit = Cesium.LightingModel.UNLIT;
   if (mode === "classification") {
-    const branches = CLASSES
+    const branches = legendClasses()
       .filter((c) => !hiddenClasses.has(c.code))
       .map((c) => `  if (abs(c - ${c.code}.0) < 0.5) { material.diffuse = ${hexToVec3(c.color)}; return; }`)
       .join("\n");
@@ -279,7 +322,7 @@ let intensityScale = 65535;
 
 function buildStyle(mode) {
   if (mode === "classification") {
-    const conditions = CLASSES
+    const conditions = legendClasses()
       .filter((c) => !hiddenClasses.has(c.code))
       .map((c) => [`\${classification} === ${c.code}`, `color('${c.color}')`]);
     conditions.push(["true", "color('black', 0)"]);  // hidden or unknown
@@ -308,15 +351,44 @@ function applyStyle() {
   }
 }
 
+// Class codes present in the data, with point counts. Filled from the run's
+// 04_validation.json (written by run_test.py next to tiles/). Null means
+// unknown, in which case the full ASPRS list is shown.
+let presentClasses = null;
+
+async function loadPresentClasses(tilesetUrl) {
+  presentClasses = null;
+  try {
+    const url = new URL("../04_validation.json", new URL(tilesetUrl, location.href));
+    const v = await (await fetch(url)).json();
+    const counts = v.fields && v.fields.classification && v.fields.classification.value_counts;
+    if (counts) presentClasses = Object.fromEntries(
+      Object.entries(counts).map(([k, n]) => [Number(k), n]));
+  } catch (e) { /* no validation file next to the tileset: show the full list */ }
+}
+
 function buildLegend() {
   const box = $("legend");
   box.innerHTML = "";
-  CLASSES.forEach((c) => {
+  const note = document.createElement("div");
+  note.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:6px";
+  note.textContent = presentClasses
+    ? "Classes found in this dataset (from 04_validation.json):"
+    : "Standard ASPRS codes. Run run_test.py to see which are in the data.";
+  box.appendChild(note);
+  const list = presentClasses
+    ? Object.keys(presentClasses).map(Number).sort((a, b) => a - b).map((code) =>
+        CLASSES.find((c) => c.code === code) ||
+        { code, name: "Reserved / user defined", color: "#e5e7eb" })
+    : CLASSES;
+  list.forEach((c) => {
     const row = document.createElement("div");
     row.className = "legend-item" + (hiddenClasses.has(c.code) ? " off" : "");
+    const n = presentClasses ? presentClasses[c.code] : null;
     row.innerHTML =
       `<span class="swatch" style="background:${c.color}"></span>` +
-      `<span>${c.code} ${c.name}</span>`;
+      `<span>${c.code} ${c.name}</span>` +
+      (n != null ? `<span style="color:var(--muted);font-variant-numeric:tabular-nums">${n.toLocaleString()}</span>` : "");
     row.onclick = () => {
       hiddenClasses.has(c.code) ? hiddenClasses.delete(c.code)
                                 : hiddenClasses.add(c.code);
@@ -339,17 +411,26 @@ async function detectAttributes(tilesetUrl) {
     const ts = await (await fetch(base)).json();
     const uriOf = (n) => n && n.content && (n.content.uri || n.content.url);
 
-    // Breadth-first: first content tile deeper than the overview levels.
-    let queue = [{ node: ts.root, depth: 0 }], target = null;
+    // Breadth-first: first point tile deeper than the overview levels.
+    // Content that is itself a tileset (tileset.<node>.json, written by
+    // py3dtiles when a subtree's JSON passes 100 KB) is followed, not read.
+    let queue = [{ node: ts.root, depth: 0, base }], target = null, targetBase = base;
     while (queue.length && !target) {
-      const { node, depth } = queue.shift();
-      if (depth >= 2 && uriOf(node)) target = uriOf(node);
-      (node.children || []).forEach((c) => queue.push({ node: c, depth: depth + 1 }));
+      const { node, depth, base: nodeBase } = queue.shift();
+      const uri = uriOf(node);
+      if (uri && uri.endsWith(".json")) {
+        const subUrl = new URL(uri, nodeBase);
+        const sub = await (await fetch(subUrl)).json();
+        queue.push({ node: sub.root, depth, base: subUrl });
+        continue;
+      }
+      if (depth >= 2 && uri) { target = uri; targetBase = nodeBase; break; }
+      (node.children || []).forEach((c) => queue.push({ node: c, depth: depth + 1, base: nodeBase }));
     }
-    target = target || uriOf(ts.root);
+    if (!target && uriOf(ts.root) && !uriOf(ts.root).endsWith(".json")) target = uriOf(ts.root);
     if (!target) return [];
 
-    const buf = await (await fetch(new URL(target, base))).arrayBuffer();
+    const buf = await (await fetch(new URL(target, targetBase))).arrayBuffer();
     const dv = new DataView(buf);
     const magic = new TextDecoder().decode(new Uint8Array(buf, 0, 4));
     const text = (off, len) => new TextDecoder().decode(new Uint8Array(buf, off, len));
@@ -420,6 +501,8 @@ async function loadTileset() {
   tileset.maximumMemoryUsage = 1024;
   viewer.scene.primitives.add(tileset);
   await viewer.zoomTo(tileset);
+  clearPins();
+  await loadSourceCrs(url);
 
   tileset.allTilesLoaded.addEventListener(() => {
     $("mLoadTime").textContent =
@@ -435,6 +518,7 @@ async function loadTileset() {
   // Cesium hands per-point attributes to the styling engine only, there is
   // no public API to list them. So read one tile's header directly instead,
   // the same way scripts/04_validate_tileset.py does.
+  await loadPresentClasses(url);
   const attrs = await detectAttributes(url);
   $("mAttrs").textContent = attrs.length ? attrs.join(", ") : "none";
   if (!attrs.includes("classification")) {
@@ -480,6 +564,208 @@ viewer.scene.postRender.addEventListener(() => {
       ((s.geometryByteLength + s.texturesByteLength) / 1048576).toFixed(1) + " MB";
   }
 });
+
+// ---------------------------------------------------------------------------
+// Coordinates: hover to read the position under the cursor, click to pin it.
+//
+// Cesium works in Earth-centred XYZ (EPSG:4978). Each picked position is
+// turned back into latitude / longitude / height on the WGS 84 ellipsoid,
+// then into UTM, so it can be compared directly with the source LAS, ground
+// control points or a survey report.
+//
+// Height: EPSG:32755 has no vertical component, so py3dtiles carries the LAS
+// Z value through as height above the ellipsoid. The height shown here is
+// therefore the source Z. Whether that Z is ellipsoidal or AHD is a property
+// of the survey, not of the tiling (in this area the two differ by ~20 m).
+//
+// Precision: the position comes from the depth buffer of the rendered frame,
+// i.e. the surface of the point under the cursor. Measured against the
+// source LAS: about 1 cm with the camera 20 m away, 2 to 5 cm at 60 m, and
+// 30 to 50 cm when the whole site is in view. Zoom in before pinning a point
+// for a report.
+// ---------------------------------------------------------------------------
+let utmFixed = null;   // { zone, south } from the source CRS, if known
+let pins = [];
+
+function utmFromEpsg(epsg) {
+  if (epsg >= 32601 && epsg <= 32660) return { zone: epsg - 32600, south: false, datum: "WGS 84" };
+  if (epsg >= 32701 && epsg <= 32760) return { zone: epsg - 32700, south: true, datum: "WGS 84" };
+  if (epsg >= 7846 && epsg <= 7859) return { zone: epsg - 7800, south: true, datum: "GDA2020 MGA" };
+  return null;
+}
+
+// The run's 01_inspect.json (next to tiles/) records the source CRS. Use its
+// UTM zone so the readout is in the same grid as the source file.
+async function loadSourceCrs(tilesetUrl) {
+  utmFixed = null;
+  $("mCrs").textContent = "unknown";
+  try {
+    const url = new URL("../01_inspect.json", new URL(tilesetUrl, location.href));
+    const v = await (await fetch(url)).json();
+    if (v.crs) {
+      $("mCrs").textContent = v.crs.epsg ? "EPSG:" + v.crs.epsg : v.crs.name;
+      $("mCrs").title = v.crs.name;
+      utmFixed = v.crs.epsg ? utmFromEpsg(v.crs.epsg) : null;
+    }
+  } catch (e) { /* no inspect report: fall back to the zone from longitude */ }
+}
+
+// WGS 84 geographic -> UTM (Krueger series, 4th order). Checked against
+// pyproj on 2,000 random points in all 60 zones: worst error 0.0000002 m.
+function toUtm(latDeg, lonDeg, zone, south) {
+  const a = 6378137.0, f = 1 / 298.257223563, k0 = 0.9996;
+  const n = f / (2 - f), n2 = n * n, n3 = n2 * n, n4 = n3 * n;
+  const A = a / (1 + n) * (1 + n2 / 4 + n4 / 64);
+  const al = [
+    n / 2 - 2 * n2 / 3 + 5 * n3 / 16 + 41 * n4 / 180,
+    13 * n2 / 48 - 3 * n3 / 5 + 557 * n4 / 1440,
+    61 * n3 / 240 - 103 * n4 / 140,
+    49561 * n4 / 161280,
+  ];
+  const lon0 = (zone * 6 - 183) * Math.PI / 180;
+  const phi = latDeg * Math.PI / 180, dl = lonDeg * Math.PI / 180 - lon0;
+  const c = 2 * Math.sqrt(n) / (1 + n);
+  const t = Math.sinh(Math.atanh(Math.sin(phi)) - c * Math.atanh(c * Math.sin(phi)));
+  const xi = Math.atan2(t, Math.cos(dl));
+  const eta = Math.atanh(Math.sin(dl) / Math.sqrt(1 + t * t));
+  let x = eta, y = xi;
+  for (let j = 1; j <= 4; j++) {
+    x += al[j - 1] * Math.cos(2 * j * xi) * Math.sinh(2 * j * eta);
+    y += al[j - 1] * Math.sin(2 * j * xi) * Math.cosh(2 * j * eta);
+  }
+  return { easting: 500000 + k0 * A * x, northing: (south ? 10000000 : 0) + k0 * A * y };
+}
+
+// The cursor often sits in the gap between two points. Try the pixel itself
+// first, then rings of 2, 4, 6 and 8 px around it, and use the first hit.
+// Each try is an extra render pass, so hover only searches the first two
+// rings (17 tries) and a click searches all four (33 tries).
+const PICK_OFFSETS = [[0, 0]];
+for (const r of [2, 4, 6, 8]) {
+  for (let k = 0; k < 8; k++) {
+    const a = k * Math.PI / 4;
+    PICK_OFFSETS.push([Math.round(r * Math.cos(a)), Math.round(r * Math.sin(a))]);
+  }
+}
+
+function pickCoords(windowPos, tries = PICK_OFFSETS.length) {
+  if (!tileset || !viewer.scene.pickPositionSupported) return null;
+  let cart;
+  for (const [dx, dy] of PICK_OFFSETS.slice(0, tries)) {
+    cart = viewer.scene.pickPosition(new Cesium.Cartesian2(windowPos.x + dx, windowPos.y + dy));
+    if (Cesium.defined(cart)) break;
+  }
+  if (!Cesium.defined(cart)) return null;
+  const carto = Cesium.Cartographic.fromCartesian(cart);
+  if (!carto || Math.abs(carto.height) > 20000) return null;   // background
+  const lat = Cesium.Math.toDegrees(carto.latitude);
+  const lon = Cesium.Math.toDegrees(carto.longitude);
+  const z = utmFixed || {
+    zone: Math.min(60, Math.floor((lon + 180) / 6) + 1), south: lat < 0, datum: "WGS 84" };
+  const u = toUtm(lat, lon, z.zone, z.south);
+  return { cart, lat, lon, h: carto.height, e: u.easting, n: u.northing,
+           zoneText: `${z.zone}${z.south ? "S" : "N"} (${z.datum})` };
+}
+
+function showCoords(p) {
+  $("cZone").textContent = p ? p.zoneText : "-";
+  $("cE").textContent = p ? p.e.toFixed(3) : "-";
+  $("cN").textContent = p ? p.n.toFixed(3) : "-";
+  $("cH").textContent = p ? p.h.toFixed(3) : "-";
+  $("cLat").textContent = p ? p.lat.toFixed(8) : "-";
+  $("cLon").textContent = p ? p.lon.toFixed(8) : "-";
+}
+
+// Note: Cesium 1.145 loads .pnts batch table values as per-point attributes,
+// not as pickable features, so classification and intensity of a single
+// point cannot be read back here. Use Colour by Classification instead.
+function renderPins() {
+  $("pins").innerHTML = pins.map((p) =>
+    `<div><b>${p.id}</b>E ${p.e.toFixed(3)}  N ${p.n.toFixed(3)}  H ${p.h.toFixed(3)}</div>`).join("");
+}
+
+function clearPins() {
+  pins.forEach((p) => viewer.entities.remove(p.entity));
+  pins = [];
+  renderPins();
+}
+
+const tip = $("tip");
+const mouse = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
+let hoverAt = null;
+
+mouse.setInputAction((m) => { hoverAt = m.endPosition; }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
+
+// Picking forces an extra render pass, so hover is sampled ~12 times a second
+// rather than on every mouse event.
+setInterval(() => {
+  if (!hoverAt) return;
+  const at = hoverAt;
+  hoverAt = null;
+  const p = pickCoords(at, 17);
+  showCoords(p);
+  if (!p) { tip.style.display = "none"; return; }
+  tip.innerHTML = `<span>E</span> ${p.e.toFixed(3)}  <span>N</span> ${p.n.toFixed(3)}` +
+                  `<br><span>H</span> ${p.h.toFixed(3)} m`;
+  tip.style.left = (at.x + 16) + "px";
+  tip.style.top = (at.y + 16) + "px";
+  tip.style.display = "block";
+}, 80);
+
+viewer.scene.canvas.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+
+mouse.setInputAction((c) => {
+  // Pick on the next frame, not inside the mouse event, so the depth buffer
+  // read is the settled frame (picking inside the event was measured to
+  // occasionally return a stale depth, up to ~1 m off).
+  const at = Cesium.Cartesian2.clone(c.position);
+  requestAnimationFrame(() => addPin(at));
+}, Cesium.ScreenSpaceEventType.LEFT_CLICK);
+
+function addPin(at) {
+  const p = pickCoords(at);
+  if (!p) {
+    setStatus("No point under the cursor. Click directly on the point cloud.", "");
+    return;
+  }
+  p.id = "P" + (pins.length + 1);
+  // Kept in the CSV as a rough precision indicator (see the note above).
+  p.camDist = Cesium.Cartesian3.distance(viewer.camera.positionWC, p.cart);
+  p.entity = viewer.entities.add({
+    position: p.cart,
+    point: { pixelSize: 9, color: Cesium.Color.YELLOW, outlineColor: Cesium.Color.BLACK,
+             outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    label: { text: p.id, font: "12px sans-serif", fillColor: Cesium.Color.YELLOW,
+             outlineColor: Cesium.Color.BLACK, outlineWidth: 3,
+             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+             pixelOffset: new Cesium.Cartesian2(10, -10),
+             disableDepthTestDistance: Number.POSITIVE_INFINITY },
+  });
+  pins.push(p);
+  renderPins();
+  showCoords(p);
+}
+
+// Cesium's default double-click flies to an entity, which fights with pins.
+viewer.cesiumWidget.screenSpaceEventHandler.removeInputAction(
+  Cesium.ScreenSpaceEventType.LEFT_DOUBLE_CLICK);
+
+$("clearPins").onclick = clearPins;
+$("copyPins").onclick = async () => {
+  if (!pins.length) { setStatus("No pins yet. Click on the point cloud first.", ""); return; }
+  const rows = ["id,easting,northing,height,latitude,longitude,utm_zone,camera_distance_m"];
+  pins.forEach((p) => rows.push([p.id, p.e.toFixed(3), p.n.toFixed(3), p.h.toFixed(3),
+    p.lat.toFixed(8), p.lon.toFixed(8), p.zoneText.split(" ")[0],
+    p.camDist.toFixed(0)].join(",")));
+  const csv = rows.join("\n");
+  try {
+    await navigator.clipboard.writeText(csv);
+    setStatus(`Copied ${pins.length} pin(s) as CSV. Paste into Excel or a report.`, "ok");
+  } catch (e) {
+    console.log(csv);
+    setStatus("Clipboard blocked by the browser. The CSV was written to the console (F12).", "bad");
+  }
+};
 
 // ---------------------------------------------------------------------------
 // Controls

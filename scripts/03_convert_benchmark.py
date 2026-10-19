@@ -105,20 +105,33 @@ def dir_stats(path):
 
 
 def tileset_depth(tileset_json):
-    """Maximum depth of the tileset tree, a rough proxy for LOD levels."""
-    try:
-        data = json.loads(Path(tileset_json).read_text())
-    except Exception:
-        return None
+    """Maximum depth of the whole tile tree, following external tilesets.
 
-    def walk(node, depth=1):
+    py3dtiles splits any subtree whose JSON exceeds 100 KB into a separate
+    tileset.<node>.json. Counting only the root file would report a dense
+    dataset as having very few levels.
+    """
+    def load(path):
+        try:
+            return json.loads(Path(path).read_text())
+        except Exception:
+            return None
+
+    def walk(node, depth, base_dir):
+        uri = (node.get("content") or {}).get("uri") or (node.get("content") or {}).get("url")
+        if uri and uri.endswith(".json"):
+            sub = load(Path(base_dir) / uri)
+            if sub and sub.get("root"):
+                # The external root replaces this node, so do not add a level.
+                return walk(sub["root"], depth, (Path(base_dir) / uri).parent)
         children = node.get("children") or []
         if not children:
             return depth
-        return max(walk(c, depth + 1) for c in children)
+        return max(walk(c, depth + 1, base_dir) for c in children)
 
-    root = data.get("root")
-    return walk(root) if root else None
+    data = load(tileset_json)
+    root = data.get("root") if data else None
+    return walk(root, 1, Path(tileset_json).parent) if root else None
 
 
 class PeakMemorySampler(threading.Thread):
