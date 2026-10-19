@@ -106,12 +106,51 @@ camera_distance_m, ready to paste into Excel or a report.
   clicking: CesiumJS loads them as per-point attributes, not as pickable
   features. Use "Colour by" instead.
 
+MAP CHECK (basemap + reference point)
+=====================================
+
+Checks that the cloud lands in the right place on the Earth.
+
+  Basemap
+      Vicmap aerial (Victoria, ~15 cm), NSW Spatial Services imagery (NSW)
+      or Esri World Imagery (anywhere, coarser). No account or key needed.
+      Leave it on "None" when measuring performance.
+
+      There is no terrain, so the imagery lies at height 0 while the cloud
+      is ~1,700 m up. While a basemap is on, the cloud is DRAWN lowered
+      until its lowest point is 1 m above the imagery. Coordinate readouts,
+      pins and the reference marker undo this, so every number shown is
+      still a true source coordinate (checked: same 4 cm precision at
+      45 to 75 m as with the basemap off).
+
+  Top view
+      Straight down with an orthographic camera, so trees do not lean and
+      what lines up on screen lines up on the ground.
+
+  Show point cloud
+      Untick to see the imagery underneath. Hovering over the imagery then
+      reads the imagery's own position ("Picked: imagery"), so the same
+      feature (hut roof corner, road edge) can be read in both and the
+      offset written down.
+
+  Reference point
+      Load DJI Terra's lidar_geo_desc.json (it reads ref_GPS) or type a
+      latitude / longitude / height, e.g. a GCP. A red REF marker is drawn
+      and the panel shows its UTM coordinates, whether it falls inside the
+      cloud's extent and how far it is from the extent centre.
+
+      Note: in lidar_geo_desc.json, ref_GPS is the origin of DJI Terra's
+      local working frame (cs_type LOCAL_ENU_CS), not the geometric centre
+      of the cloud. Expect it inside the survey area, typically near where
+      the flight started, not exactly in the middle.
+
 NOTES
 =====
 
 - No Cesium ion account or token is required. The globe and base imagery are
-  deliberately disabled, so nothing is requested from ion and the frame rate
-  measures the tileset on its own.
+  off by default, so nothing is requested from ion and the frame rate
+  measures the tileset on its own. The Map check basemaps are public tile
+  services, not ion.
 - CesiumJS 1.145.0 is loaded from a CDN, so the machine needs internet access
   the first time. To run fully offline, download the Cesium build and change
   the two CDN URLs at the top of index.html to local paths.

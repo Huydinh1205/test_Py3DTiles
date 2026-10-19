@@ -158,10 +158,6 @@
     </div>
   </fieldset>
 
-  <fieldset id="legendBox" style="display:none">
-    <legend>Classes (click to toggle)</legend>
-    <div id="legend"></div>
-  </fieldset>
 
   <fieldset>
     <legend>Performance</legend>
@@ -369,6 +365,7 @@ async function loadPresentClasses(tilesetUrl) {
 
 function buildLegend() {
   const box = $("legend");
+  if (!box) return;   // class legend panel removed from this viewer
   box.innerHTML = "";
   const note = document.createElement("div");
   note.style.cssText = "font-size:11px;color:var(--muted);margin-bottom:6px";
@@ -524,8 +521,6 @@ async function loadTileset() {
   if (!attrs.includes("classification")) {
     setStatus("Loaded, but the tileset has NO classification attribute. " +
       "Colour by Classification will show nothing. Check step 1 and 4 output.", "bad");
-    buildLegend();
-    $("legendBox").style.display = "block";
     applyStyle();
     return;
   }
@@ -534,8 +529,6 @@ async function loadTileset() {
     ? "Loaded 3D Tiles 1.1. Attributes are rendered through a CustomShader, " +
       "the declarative style language cannot read them in this format."
     : "Loaded. Switch 'Colour by' to Classification to check the attribute.", "ok");
-  buildLegend();
-  $("legendBox").style.display = "block";
   applyStyle();
 
 }
