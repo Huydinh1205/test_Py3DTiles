@@ -44,6 +44,9 @@
     font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; }
   #cesium { position: absolute; inset: 0; }
   .cesium-widget-credits { display: none !important; }
+  #attrib { position: absolute; right: 8px; bottom: 6px; z-index: 10; display: none;
+    font-size: 10px; color: #e6edf3; background: rgba(13,18,23,.7); padding: 2px 6px;
+    border-radius: 4px; }
 
   #panel {
     position: absolute; top: 12px; left: 12px; width: 310px; max-height: calc(100% - 24px);
@@ -103,6 +106,7 @@
 <body>
 <div id="cesium"></div>
 <div id="tip"></div>
+<div id="attrib"></div>
 
 <div id="panel">
   <h1>py3dtiles Tileset Inspector</h1>
@@ -129,12 +133,52 @@
       <tr><td>Height (m) = source Z</td><td class="v" id="cH">-</td></tr>
       <tr><td>Latitude</td><td class="v" id="cLat">-</td></tr>
       <tr><td>Longitude</td><td class="v" id="cLon">-</td></tr>
+      <tr><td>Picked</td><td class="v" id="cSrc">-</td></tr>
     </table>
     <div id="pins"></div>
     <div class="btnrow">
       <button id="copyPins" class="secondary">Copy pins (CSV)</button>
       <button id="clearPins" class="secondary">Clear pins</button>
     </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>Map check</legend>
+    <p class="hint">Put the cloud on aerial imagery and mark a reference point
+      (e.g. ref_GPS from DJI Terra's lidar_geo_desc.json) to check it lands in
+      the right place.</p>
+    <label for="basemap">Basemap</label>
+    <select id="basemap">
+      <option value="none">None (for performance numbers)</option>
+      <option value="vic">Vicmap aerial (Victoria)</option>
+      <option value="nsw">NSW Spatial Services imagery (NSW)</option>
+      <option value="esri">Esri World Imagery (anywhere, coarser)</option>
+    </select>
+    <div class="row" style="margin-top:8px">
+      <label for="showCloud">Show point cloud</label>
+      <input type="checkbox" id="showCloud" checked style="flex:none">
+    </div>
+    <div class="btnrow">
+      <button id="topView" class="secondary">Top view (no parallax)</button>
+      <button id="perspView" class="secondary">3D view</button>
+    </div>
+    <label for="geoDesc" style="margin-top:10px">Reference point: load lidar_geo_desc.json</label>
+    <input type="file" id="geoDesc" accept=".json" style="font-size:11px;width:100%">
+    <label style="margin-top:8px">or type it (decimal degrees, metres)</label>
+    <div class="btnrow">
+      <input type="text" id="refLat" placeholder="Latitude">
+      <input type="text" id="refLon" placeholder="Longitude">
+      <input type="text" id="refAlt" placeholder="Height" style="width:70px;flex:none">
+    </div>
+    <button id="addRef" class="secondary">Mark reference point</button>
+    <table id="refTable" style="margin-top:6px;display:none">
+      <tr><td>Ref easting</td><td class="v" id="rE">-</td></tr>
+      <tr><td>Ref northing</td><td class="v" id="rN">-</td></tr>
+      <tr><td>Ref height</td><td class="v" id="rH">-</td></tr>
+      <tr><td>Inside cloud extent</td><td class="v" id="rIn">-</td></tr>
+      <tr><td>From extent centre</td><td class="v" id="rOff">-</td></tr>
+      <tr><td>Cloud Z range</td><td class="v" id="rZ">-</td></tr>
+    </table>
   </fieldset>
 
   <fieldset>
@@ -201,10 +245,10 @@ const CLASSES = [
   { code: 18, name: "High noise",       color: "#ec4899" },
 ];
 
-// Globe and base imagery off: nothing is fetched from Cesium ion, and the
-// frame rate reflects the tileset alone.
+// Globe hidden and no base imagery by default: nothing is fetched from
+// Cesium ion, and the frame rate reflects the tileset alone. The globe exists
+// (hidden) only so the "Map check" panel can switch a basemap on.
 const viewer = new Cesium.Viewer("cesium", {
-  globe: false,
   baseLayer: false,
   baseLayerPicker: false,
   geocoder: false,
@@ -218,6 +262,13 @@ const viewer = new Cesium.Viewer("cesium", {
   requestRenderMode: false,
 });
 viewer.scene.backgroundColor = Cesium.Color.fromCssColorString("#11161c");
+viewer.scene.globe.show = false;
+viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#11161c");
+viewer.scene.skyAtmosphere.show = false;
+viewer.scene.globe.showGroundAtmosphere = false;
+viewer.scene.skyBox.show = false;
+viewer.scene.sun.show = false;
+viewer.scene.moon.show = false;
 
 const $ = (id) => document.getElementById(id);
 const statusEl = $("status");
@@ -500,6 +551,9 @@ async function loadTileset() {
   await viewer.zoomTo(tileset);
   clearPins();
   await loadSourceCrs(url);
+  if ($("basemap").value !== "none") setDrop(true);
+  refLLA = null;
+  if (refEntity) { viewer.entities.remove(refEntity); refEntity = null; }
 
   tileset.allTilesLoaded.addEventListener(() => {
     $("mLoadTime").textContent =
@@ -578,6 +632,7 @@ viewer.scene.postRender.addEventListener(() => {
 // for a report.
 // ---------------------------------------------------------------------------
 let utmFixed = null;   // { zone, south } from the source CRS, if known
+let sourceExtent = null;   // { mins, maxs } in source CRS units, from 01_inspect.json
 let pins = [];
 
 function utmFromEpsg(epsg) {
@@ -591,6 +646,7 @@ function utmFromEpsg(epsg) {
 // UTM zone so the readout is in the same grid as the source file.
 async function loadSourceCrs(tilesetUrl) {
   utmFixed = null;
+  sourceExtent = null;
   $("mCrs").textContent = "unknown";
   try {
     const url = new URL("../01_inspect.json", new URL(tilesetUrl, location.href));
@@ -600,6 +656,7 @@ async function loadSourceCrs(tilesetUrl) {
       $("mCrs").title = v.crs.name;
       utmFixed = v.crs.epsg ? utmFromEpsg(v.crs.epsg) : null;
     }
+    if (v.mins && v.maxs) sourceExtent = { mins: v.mins, maxs: v.maxs };
   } catch (e) { /* no inspect report: fall back to the zone from longitude */ }
 }
 
@@ -649,6 +706,17 @@ function pickCoords(windowPos, tries = PICK_OFFSETS.length) {
     if (Cesium.defined(cart)) break;
   }
   if (!Cesium.defined(cart)) return null;
+  const shown = cart;
+  let src = "point cloud";
+  if (dropShift) {
+    // With a basemap on, the cloud is drawn lowered onto the imagery (see
+    // "Map check"). Imagery sits at height 0 and the lowered cloud at >= 1 m,
+    // so the height tells which one was hit. Cloud hits are shifted back to
+    // their true position; imagery hits are already true.
+    const hh = Cesium.Cartographic.fromCartesian(cart).height;
+    if (hh < 0.5) src = "imagery";
+    else cart = Cesium.Cartesian3.subtract(cart, dropShift, new Cesium.Cartesian3());
+  }
   const carto = Cesium.Cartographic.fromCartesian(cart);
   if (!carto || Math.abs(carto.height) > 20000) return null;   // background
   const lat = Cesium.Math.toDegrees(carto.latitude);
@@ -656,7 +724,7 @@ function pickCoords(windowPos, tries = PICK_OFFSETS.length) {
   const z = utmFixed || {
     zone: Math.min(60, Math.floor((lon + 180) / 6) + 1), south: lat < 0, datum: "WGS 84" };
   const u = toUtm(lat, lon, z.zone, z.south);
-  return { cart, lat, lon, h: carto.height, e: u.easting, n: u.northing,
+  return { cart: shown, lat, lon, h: carto.height, e: u.easting, n: u.northing, src,
            zoneText: `${z.zone}${z.south ? "S" : "N"} (${z.datum})` };
 }
 
@@ -667,6 +735,7 @@ function showCoords(p) {
   $("cH").textContent = p ? p.h.toFixed(3) : "-";
   $("cLat").textContent = p ? p.lat.toFixed(8) : "-";
   $("cLon").textContent = p ? p.lon.toFixed(8) : "-";
+  $("cSrc").textContent = p ? p.src : "-";
 }
 
 // Note: Cesium 1.145 loads .pnts batch table values as per-point attributes,
@@ -759,6 +828,162 @@ $("copyPins").onclick = async () => {
     setStatus("Clipboard blocked by the browser. The CSV was written to the console (F12).", "bad");
   }
 };
+
+// ---------------------------------------------------------------------------
+// Map check: aerial basemap + reference point.
+//
+// There is no terrain, so the imagery lies on the ellipsoid (height 0) while
+// the cloud sits at its real height (~1,700 m at Copes Hut). Seen from above,
+// that gap causes parallax and makes the imagery load at a coarse level.
+// So while a basemap is on, the cloud is DRAWN lowered straight down until
+// its lowest point is 1 m above the imagery. Only the display moves:
+// coordinate readouts, pins and the reference marker undo the shift, so all
+// numbers stay true source coordinates. The shift is along the vertical at
+// the cloud centre; away from the centre that adds a horizontal error of
+// shift x distance / 6,371 km (~5 cm at 200 m for a 1,700 m drop).
+//
+// "Top view" then looks straight down with an orthographic camera, so tall
+// objects (trees) do not lean either. Hovering over the imagery reads the
+// imagery's own position ("Picked: imagery"), so the same feature can be
+// read in both and compared.
+// ---------------------------------------------------------------------------
+const BASEMAPS = {
+  vic: { url: "https://base.maps.vic.gov.au/wmts/AERIAL_WM_256/EPSG:3857:256/{zz}/{x}/{y}.png",
+         maxLevel: 21, credit: "Imagery: Vicmap Basemaps, State of Victoria (CC BY 4.0)",
+         // Vicmap names its zoom levels "00", "01", ... in the URL.
+         custom: { zz: (p, x, y, level) => String(level).padStart(2, "0") } },
+  nsw: { url: "https://maps.six.nsw.gov.au/arcgis/rest/services/public/NSW_Imagery/MapServer/tile/{z}/{y}/{x}",
+         maxLevel: 21, credit: "Imagery: NSW Spatial Services" },
+  esri: { url: "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+          maxLevel: 18, credit: "Imagery: Esri, Maxar, Earthstar Geographics" },
+};
+let basemapLayer = null;
+let dropShift = null;   // ECEF vector the cloud is drawn shifted by, or null
+let refLLA = null;      // last reference point, re-placed when the shift changes
+
+// Lower (or restore) the drawn cloud. See the comment above.
+function setDrop(on) {
+  dropShift = null;
+  if (tileset) tileset.modelMatrix = Cesium.Matrix4.clone(Cesium.Matrix4.IDENTITY);
+  if (on && tileset) {
+    const c = tileset.boundingSphere.center;
+    const cH = Cesium.Cartographic.fromCartesian(c).height;
+    // Lowest point of the cloud: from 01_inspect.json if present, else the
+    // bottom of the bounding sphere (conservative: lowers a bit less).
+    const zMin = sourceExtent ? sourceExtent.mins[2] : cH - tileset.boundingSphere.radius;
+    const drop = zMin - 1.0;
+    const up = Cesium.Ellipsoid.WGS84.geodeticSurfaceNormal(c, new Cesium.Cartesian3());
+    dropShift = Cesium.Cartesian3.multiplyByScalar(up, -drop, new Cesium.Cartesian3());
+    tileset.modelMatrix = Cesium.Matrix4.fromTranslation(dropShift);
+  }
+  clearPins();   // pins are drawn in the old frame
+  if (refLLA) markReference(...refLLA);
+}
+
+function setBasemap(key) {
+  if (basemapLayer) { viewer.imageryLayers.remove(basemapLayer, true); basemapLayer = null; }
+  const b = BASEMAPS[key];
+  viewer.scene.globe.show = !!b;
+  $("attrib").style.display = b ? "block" : "none";
+  setDrop(!!b);
+  if (!b) {
+    setStatus("Basemap off. The cloud is drawn at its true height again.", "ok");
+    return;
+  }
+  $("attrib").textContent = b.credit;
+  const provider = new Cesium.UrlTemplateImageryProvider({
+    url: b.url, maximumLevel: b.maxLevel, credit: b.credit,
+    customTags: b.custom,
+  });
+  basemapLayer = viewer.imageryLayers.addImageryProvider(provider);
+  setStatus("Basemap on. The cloud is drawn lowered onto the imagery; coordinate " +
+            "readouts still show true heights. Use 'Top view' to compare.", "ok");
+}
+
+function topView() {
+  if (!tileset) return;
+  const bs = tileset.boundingSphere;   // includes the drop shift
+  viewer.camera.switchToPerspectiveFrustum();
+  viewer.camera.flyToBoundingSphere(bs, {
+    duration: 0, offset: new Cesium.HeadingPitchRange(0, -Cesium.Math.PI_OVER_TWO, bs.radius * 2.2),
+  });
+  viewer.camera.switchToOrthographicFrustum();
+}
+
+function perspectiveView() {
+  viewer.camera.switchToPerspectiveFrustum();
+  if (tileset) viewer.zoomTo(tileset);
+}
+
+let refEntity = null;
+
+function markReference(lat, lon, alt) {
+  if (![lat, lon].every(Number.isFinite)) {
+    setStatus("Reference point needs a numeric latitude and longitude.", "bad");
+    return;
+  }
+  const h = Number.isFinite(alt) ? alt : 0;
+  refLLA = [lat, lon, alt];
+  if (refEntity) viewer.entities.remove(refEntity);
+  // Drawn in the same (possibly lowered) frame as the cloud.
+  let top = Cesium.Cartesian3.fromDegrees(lon, lat, h);
+  if (dropShift) top = Cesium.Cartesian3.add(top, dropShift, new Cesium.Cartesian3());
+  refEntity = viewer.entities.add({
+    position: top,
+    point: { pixelSize: 12, color: Cesium.Color.RED, outlineColor: Cesium.Color.WHITE,
+             outlineWidth: 2, disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    label: { text: "REF", font: "bold 12px sans-serif", fillColor: Cesium.Color.RED,
+             outlineColor: Cesium.Color.WHITE, outlineWidth: 3,
+             style: Cesium.LabelStyle.FILL_AND_OUTLINE,
+             pixelOffset: new Cesium.Cartesian2(12, -12),
+             disableDepthTestDistance: Number.POSITIVE_INFINITY },
+    // Vertical line down to the ground, so the reference shows on the map in
+    // 3D view as well.
+    polyline: { positions: [top, Cesium.Cartesian3.fromDegrees(lon, lat, 0)],
+                width: 2, material: Cesium.Color.RED.withAlpha(0.8) },
+  });
+
+  const z = utmFixed || { zone: Math.min(60, Math.floor((lon + 180) / 6) + 1), south: lat < 0 };
+  const u = toUtm(lat, lon, z.zone, z.south);
+  $("refTable").style.display = "table";
+  $("rE").textContent = u.easting.toFixed(3);
+  $("rN").textContent = u.northing.toFixed(3);
+  $("rH").textContent = Number.isFinite(alt) ? alt.toFixed(3) : "-";
+  if (sourceExtent) {
+    const [x0, y0, z0] = sourceExtent.mins, [x1, y1, z1] = sourceExtent.maxs;
+    const inside = u.easting >= x0 && u.easting <= x1 && u.northing >= y0 && u.northing <= y1;
+    const dE = u.easting - (x0 + x1) / 2, dN = u.northing - (y0 + y1) / 2;
+    $("rIn").textContent = inside ? "yes" : "NO";
+    $("rIn").style.color = inside ? "var(--ok)" : "var(--bad)";
+    $("rOff").textContent = `${dE >= 0 ? "+" : ""}${dE.toFixed(1)} E, ${dN >= 0 ? "+" : ""}${dN.toFixed(1)} N m`;
+    $("rZ").textContent = `${z0.toFixed(2)} to ${z1.toFixed(2)}`;
+  } else {
+    $("rIn").textContent = "unknown (no 01_inspect.json)";
+  }
+  $("refLat").value = String(lat);
+  $("refLon").value = String(lon);
+  $("refAlt").value = Number.isFinite(alt) ? String(alt) : "";
+}
+
+$("geoDesc").onchange = async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    const j = JSON.parse(await f.text());
+    const g = j.ref_GPS || j.ref_gps || j.refGPS;
+    if (!g) throw new Error("no ref_GPS block in this file");
+    markReference(Number(g.latitude), Number(g.longitude), Number(g.altitude));
+    setStatus(`Reference point loaded from ${f.name} (${j.cs_type || "unknown cs_type"}).`, "ok");
+  } catch (err) {
+    setStatus("Could not read " + f.name + ": " + err.message, "bad");
+  }
+};
+$("addRef").onclick = () => markReference(
+  parseFloat($("refLat").value), parseFloat($("refLon").value), parseFloat($("refAlt").value));
+$("basemap").onchange = (e) => setBasemap(e.target.value);
+$("showCloud").onchange = (e) => { if (tileset) tileset.show = e.target.checked; };
+$("topView").onclick = topView;
+$("perspView").onclick = perspectiveView;
 
 // ---------------------------------------------------------------------------
 // Controls
